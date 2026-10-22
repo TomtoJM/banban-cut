@@ -14,6 +14,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -34,13 +35,15 @@ class MainActivity : ComponentActivity() {
                         var template by remember { mutableStateOf(Template.load(ctx)) }
                         var project by remember { mutableStateOf(Project.load(ctx, template.hookText)) }
                         var editing by remember { mutableStateOf<Int?>(null) }
-                        var update by remember { mutableStateOf<Update?>(null) }
+                        var update by remember { mutableStateOf<UpdateState>(UpdateState.Checking) }
+                        var checks by remember { mutableIntStateOf(0) }
 
                         LaunchedEffect(Unit) {
-                            withContext(Dispatchers.IO) {
-                                Template.refresh(ctx)?.let { template = it }
-                                update = Updater.check()
-                            }
+                            withContext(Dispatchers.IO) { Template.refresh(ctx)?.let { template = it } }
+                        }
+                        LaunchedEffect(checks) {
+                            update = UpdateState.Checking
+                            update = withContext(Dispatchers.IO) { Updater.check() }
                         }
 
                         fun change(p: Project) {
@@ -54,12 +57,14 @@ class MainActivity : ComponentActivity() {
                                 template = template,
                                 project = project,
                                 update = update,
+                                onCheckUpdate = { checks++ },
                                 onChange = ::change,
                                 onEdit = { editing = it },
                                 onAdd = {
                                     change(project.copy(cuts = project.cuts + Cut()))
                                     editing = project.cuts.lastIndex
                                 },
+                                onRestart = { change(Project(project.hook, emptyList())) },
                                 onOpen = ::open,
                                 onShare = ::share,
                             )

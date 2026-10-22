@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
@@ -66,10 +67,12 @@ private val Quiet = Color(0xFF6B7684)
 fun ProjectScreen(
     template: Template,
     project: Project,
-    update: Update?,
+    update: UpdateState,
+    onCheckUpdate: () -> Unit,
     onChange: (Project) -> Unit,
     onEdit: (Int) -> Unit,
     onAdd: () -> Unit,
+    onRestart: () -> Unit,
     onOpen: (Uri) -> Unit,
     onShare: (Uri) -> Unit,
 ) {
@@ -77,6 +80,7 @@ fun ProjectScreen(
     var progress by remember { mutableStateOf<Int?>(null) }
     var result by remember { mutableStateOf<Uri?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    var confirmRestart by remember { mutableStateOf(false) }
     val renderer = remember(template) { Renderer(context, template) }
     val ready = project.cuts.count { it.ready }
 
@@ -86,16 +90,7 @@ fun ProjectScreen(
     ) {
         Text("반반컷", fontSize = 24.sp, fontWeight = FontWeight.Bold)
 
-        if (update != null) {
-            Card(Modifier.fillMaxWidth()) {
-                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("새 버전 0.1.${update.versionCode}이 있어요", Modifier.weight(1f))
-                    Button(onClick = {
-                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(update.apkUrl)))
-                    }) { Text("받기") }
-                }
-            }
-        }
+        UpdateBar(update, onCheckUpdate)
 
         OutlinedTextField(
             value = project.hook,
@@ -158,7 +153,54 @@ fun ProjectScreen(
                 OutlinedButton(onClick = { onShare(uri) }) { Text("공유") }
             }
         }
+        if (project.cuts.isNotEmpty() && progress == null) {
+            OutlinedButton(onClick = { confirmRestart = true }, modifier = Modifier.fillMaxWidth()) { Text("새로 시작") }
+        }
         Text("버전 ${BuildConfig.VERSION_NAME}", color = Quiet, fontSize = 12.sp)
+    }
+
+    if (confirmRestart) {
+        AlertDialog(
+            onDismissRequest = { confirmRestart = false },
+            title = { Text("새로 시작할까요?") },
+            text = { Text("지금 컷 목록을 비워요. 갤러리에 저장된 영상과 원본 촬영본은 그대로 있어요.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmRestart = false
+                    result = null
+                    error = null
+                    onRestart()
+                }) { Text("비우기") }
+            },
+            dismissButton = { TextButton(onClick = { confirmRestart = false }) { Text("취소") } },
+        )
+    }
+}
+
+/** Always says where the app stands: checking, up to date, newer build, or couldn't reach GitHub. */
+@Composable
+private fun UpdateBar(state: UpdateState, onCheck: () -> Unit) {
+    val context = LocalContext.current
+    Card(Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                when (state) {
+                    UpdateState.Checking -> "새 버전 확인 중…"
+                    UpdateState.Latest -> "최신 버전이에요 (${BuildConfig.VERSION_NAME})"
+                    UpdateState.Failed -> "새 버전을 확인하지 못했어요"
+                    is UpdateState.Available -> "새 버전 0.1.${state.update.versionCode}이 있어요"
+                },
+                Modifier.weight(1f),
+                fontSize = 14.sp,
+            )
+            when (state) {
+                is UpdateState.Available -> Button(onClick = {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(state.update.apkUrl)))
+                }) { Text("받기") }
+                UpdateState.Checking -> {}
+                else -> TextButton(onClick = onCheck) { Text("다시 확인") }
+            }
+        }
     }
 }
 
