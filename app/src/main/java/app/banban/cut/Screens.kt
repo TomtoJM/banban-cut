@@ -43,6 +43,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -58,6 +59,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
 
@@ -85,6 +87,19 @@ fun ProjectScreen(
     var confirmRestart by remember { mutableStateOf(false) }
     val renderer = remember(template) { Renderer(context, template) }
     val ready = project.cuts.count { it.ready }
+    val scope = rememberCoroutineScope()
+    var importing by remember { mutableStateOf(false) }
+    var imported by remember { mutableStateOf<String?>(null) }
+    val pickMany = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(60)) { uris ->
+        if (uris.isNotEmpty()) scope.launch {
+            importing = true
+            val r = withContext(Dispatchers.IO) { Import.cuts(context, uris, template) }
+            importing = false
+            onChange(project.copy(cuts = project.cuts + r.cuts))
+            imported = "촬영본 ${r.shots}개, 앱 녹화 ${r.recordings}개로 컷 ${r.cuts.size}개를 만들었어요." +
+                if (r.shots != r.recordings) " 개수가 달라서 빈 칸이 있는 컷이 있어요." else ""
+        }
+    }
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -113,7 +128,17 @@ fun ProjectScreen(
             )
         }
 
-        OutlinedButton(onClick = onAdd, modifier = Modifier.fillMaxWidth()) { Text("+ 컷 추가") }
+        Button(
+            onClick = { pickMany.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)) },
+            enabled = !importing,
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+        ) { Text(if (importing) "불러오는 중…" else "영상 한 번에 불러오기") }
+        Text(
+            imported ?: "촬영본과 앱 녹화를 모두 한 번에 골라주세요. 화면 녹화는 아래, 나머지는 위로 가고, 찍은 순서대로 짝지어요.",
+            color = Quiet,
+            fontSize = 13.sp,
+        )
+        OutlinedButton(onClick = onAdd, modifier = Modifier.fillMaxWidth()) { Text("+ 컷 하나 추가") }
 
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -330,6 +355,13 @@ fun CutEditor(
             Text("컷 $number", fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
             TextButton(onClick = onCancel) { Text("취소") }
             Button(onClick = { onSave(cut) }) { Text("저장") }
+        }
+
+        if (cut.topUri != null || cut.appUri != null) {
+            // Import guesses which clip is the screen recording; this fixes a wrong guess.
+            TextButton(onClick = {
+                cut = cut.copy(topUri = cut.appUri, topStartMs = 0, appUri = cut.topUri, checkAtMs = leadMs)
+            }) { Text("위아래 영상 바꾸기") }
         }
 
         // ── Top half: the action ──
