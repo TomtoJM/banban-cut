@@ -14,4 +14,4 @@
 - 그 밖의 변경: main에 합치면 GitHub Actions가 서명된 APK를 Releases에 올리고, 앱이 새 버전을 알려준다.
 
 ## 빌드
-`./gradlew assembleRelease`. 서명 키는 저장소 비밀 값 `KEYSTORE_B64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`.
+`./gradlew assembleRelease`. 서명 키는 `signing/release.p12.enc`에 암호화돼 있고, 저장소 비밀 값 `SIGNING_PASSWORD` 하나로 풀린다.

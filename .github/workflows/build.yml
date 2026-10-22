@@ -13,7 +13,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      HAS_KEY: ${{ secrets.KEYSTORE_B64 != '' }}
+      HAS_KEY: ${{ secrets.SIGNING_PASSWORD != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -25,19 +25,21 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       # Same key on every build, so the phone accepts each new APK as an update.
+      # The key sits encrypted in signing/; one secret unlocks it.
       - name: Restore signing key
         env:
-          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
         if: env.HAS_KEY == 'true'
         run: |
-          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
-          echo "KEYSTORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in signing/release.p12.enc \
+            -out "$RUNNER_TEMP/release.p12" -pass env:SIGNING_PASSWORD
+          echo "KEYSTORE_FILE=$RUNNER_TEMP/release.p12" >> "$GITHUB_ENV"
 
       - name: Build
         env:
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEYSTORE_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+          KEY_ALIAS: banban
+          KEY_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
         run: |
           chmod +x gradlew
           ./gradlew --no-daemon assembleRelease
