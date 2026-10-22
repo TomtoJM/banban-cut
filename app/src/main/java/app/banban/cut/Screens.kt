@@ -35,6 +35,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -70,7 +71,6 @@ fun ProjectScreen(
     update: UpdateState,
     onCheckUpdate: () -> Unit,
     onInstall: (Update) -> Unit,
-    onOpenInstaller: (java.io.File) -> Unit,
     onChange: (Project) -> Unit,
     onEdit: (Int) -> Unit,
     onAdd: () -> Unit,
@@ -92,7 +92,7 @@ fun ProjectScreen(
     ) {
         Text("반반컷", fontSize = 24.sp, fontWeight = FontWeight.Bold)
 
-        UpdateBar(update, onCheckUpdate, onInstall, onOpenInstaller)
+        UpdateBar(update, onCheckUpdate, onInstall)
 
         OutlinedTextField(
             value = project.hook,
@@ -115,9 +115,17 @@ fun ProjectScreen(
 
         OutlinedButton(onClick = onAdd, modifier = Modifier.fillMaxWidth()) { Text("+ 컷 추가") }
 
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("마지막에 Link in bio 화면 넣기")
+                Text("끄면 영상이 끊김 없이 다시 돌아요. 링크 안내는 게시글 글에 써 주세요.", color = Quiet, fontSize = 12.sp)
+            }
+            Switch(checked = project.outro, onCheckedChange = { onChange(project.copy(outro = it)) })
+        }
+
         HorizontalDivider()
 
-        val seconds = ready * template.cutSeconds + template.endSeconds
+        val seconds = ready * template.cutSeconds + if (project.outro) template.endSeconds else 0.0
         Text(
             if (ready == 0) "위 영상과 앱 녹화를 모두 고른 컷이 있어야 만들 수 있어요."
             else "컷 ${ready}개 · ${"%.1f".format(Locale.US, seconds)}초 · ${template.width}×${template.height}",
@@ -181,7 +189,7 @@ fun ProjectScreen(
 
 /** Always says where the app stands; an update downloads and installs from right here, like a store. */
 @Composable
-private fun UpdateBar(state: UpdateState, onCheck: () -> Unit, onInstall: (Update) -> Unit, onOpenInstaller: (java.io.File) -> Unit) {
+private fun UpdateBar(state: UpdateState, onCheck: () -> Unit, onInstall: (Update) -> Unit) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -192,14 +200,13 @@ private fun UpdateBar(state: UpdateState, onCheck: () -> Unit, onInstall: (Updat
                         UpdateState.Failed -> "새 버전을 확인하지 못했어요"
                         is UpdateState.Available -> "새 버전 0.1.${state.update.versionCode}이 있어요"
                         is UpdateState.Downloading -> "업데이트 받는 중 ${state.percent}%"
-                        is UpdateState.Ready -> "설치 준비 끝"
+                        is UpdateState.Installing -> "설치 화면을 띄우는 중…"
                     },
                     Modifier.weight(1f),
                     fontSize = 14.sp,
                 )
                 when (state) {
                     is UpdateState.Available -> Button(onClick = { onInstall(state.update) }) { Text("업데이트") }
-                    is UpdateState.Ready -> Button(onClick = { onOpenInstaller(state.apk) }) { Text("설치") }
                     UpdateState.Latest, UpdateState.Failed -> TextButton(onClick = onCheck) { Text("다시 확인") }
                     else -> {}
                 }

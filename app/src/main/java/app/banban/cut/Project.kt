@@ -40,7 +40,8 @@ data class Cut(
     }
 }
 
-data class Project(val hook: String, val cuts: List<Cut>) {
+/** outro: add the closing "Link in bio" card. Off by default; reels loop better without it. */
+data class Project(val hook: String, val cuts: List<Cut>, val outro: Boolean = false) {
     companion object {
         private const val PREFS = "project"
         private const val KEY = "current"
@@ -52,13 +53,17 @@ data class Project(val hook: String, val cuts: List<Cut>) {
             return runCatching {
                 val o = JSONObject(raw)
                 val arr = o.getJSONArray("cuts")
-                Project(o.optString("hook", defaultHook), (0 until arr.length()).map { Cut.fromJson(arr.getJSONObject(it)) })
+                Project(
+                    o.optString("hook", defaultHook),
+                    (0 until arr.length()).map { Cut.fromJson(arr.getJSONObject(it)) },
+                    o.optBoolean("outro", false),
+                )
             }.getOrDefault(Project(defaultHook, emptyList()))
         }
 
         fun save(context: Context, p: Project) {
             val arr = JSONArray().apply { p.cuts.forEach { put(it.toJson()) } }
-            val raw = JSONObject().put("hook", p.hook).put("cuts", arr).toString()
+            val raw = JSONObject().put("hook", p.hook).put("cuts", arr).put("outro", p.outro).toString()
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY, raw).apply()
         }
     }

@@ -1,6 +1,7 @@
 package app.banban.cut
 
 import android.content.Intent
+import android.content.pm.PackageInstaller
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -21,11 +22,14 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.core.content.IntentCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
+    private var update by mutableStateOf<UpdateState>(UpdateState.Checking)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -37,12 +41,14 @@ class MainActivity : ComponentActivity() {
                         var template by remember { mutableStateOf(Template.load(ctx)) }
                         var project by remember { mutableStateOf(Project.load(ctx, template.hookText)) }
                         var editing by remember { mutableStateOf<Int?>(null) }
-                        var update by remember { mutableStateOf<UpdateState>(UpdateState.Checking) }
                         var checks by remember { mutableIntStateOf(0) }
                         val scope = rememberCoroutineScope()
 
                         LaunchedEffect(Unit) {
-                            withContext(Dispatchers.IO) { Template.refresh(ctx)?.let { template = it } }
+                            withContext(Dispatchers.IO) {
+                                Updater.cleanUp(ctx)
+                                Template.refresh(ctx)?.let { template = it }
+                            }
                         }
                         LaunchedEffect(checks) {
                             update = UpdateState.Checking
@@ -63,20 +69,18 @@ class MainActivity : ComponentActivity() {
                                 onCheckUpdate = { checks++ },
                                 onInstall = { u -> scope.launch {
                                     update = UpdateState.Downloading(u, 0)
-                                    val apk = withContext(Dispatchers.IO) {
-                                        Updater.download(ctx, u) { p -> scope.launch { if (update is UpdateState.Downloading) update = UpdateState.Downloading(u, p) } }
+                                    val ok = withContext(Dispatchers.IO) {
+                                        Updater.downloadAndInstall(ctx, u) { p -> scope.launch { if (update is UpdateState.Downloading) update = UpdateState.Downloading(u, p) } }
                                     }
-                                    update = if (apk == null) UpdateState.Failed else UpdateState.Ready(u, apk)
-                                    if (apk != null) Updater.install(this@MainActivity, apk)
+                                    update = if (ok) UpdateState.Installing(u) else UpdateState.Failed
                                 } },
-                                onOpenInstaller = { apk -> Updater.install(this@MainActivity, apk) },
                                 onChange = ::change,
                                 onEdit = { editing = it },
                                 onAdd = {
                                     change(project.copy(cuts = project.cuts + Cut()))
                                     editing = project.cuts.lastIndex
                                 },
-                                onRestart = { change(Project(project.hook, emptyList())) },
+                                onRestart = { change(project.copy(cuts = emptyList())) },
                                 onOpen = ::open,
                                 onShare = ::share,
                             )
@@ -95,6 +99,18 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+    }
+
+    /** The installer's answer: show its confirm screen, or note that the update didn't go through. */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.action != Updater.ACTION_INSTALL_STATUS) return
+        when (intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)) {
+            PackageInstaller.STATUS_PENDING_USER_ACTION ->
+                IntentCompat.getParcelableExtra(intent, Intent.EXTRA_INTENT, Intent::class.java)?.let(::startActivity)
+            PackageInstaller.STATUS_SUCCESS -> {}
+            else -> update = UpdateState.Failed
         }
     }
 

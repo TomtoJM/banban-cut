@@ -33,7 +33,7 @@ import java.io.FileOutputStream
 
 /**
  * Builds the reel: sequence 0 is the top half (shots, then the end card's top), sequence 1 the
- * bottom half (app recordings, then the end card's bottom). The compositor stacks them on a
+ * bottom half (app recordings, then the end card's bottom). The end card is optional. The compositor stacks them on a
  * template-sized canvas and a bitmap overlay adds the captions.
  */
 @OptIn(UnstableApi::class)
@@ -46,7 +46,6 @@ class Renderer(private val context: Context, private val t: Template) {
     fun build(project: Project): Composition {
         val cuts = project.cuts.filter { it.ready }
         val halfFit = Presentation.createForWidthAndHeight(t.width, t.halfHeight, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP)
-        val (endTop, endBottom) = endCardItems()
 
         val top = EditedMediaItemSequence.Builder(setOf(C.TRACK_TYPE_VIDEO))
         val bottom = EditedMediaItemSequence.Builder(setOf(C.TRACK_TYPE_VIDEO))
@@ -68,8 +67,11 @@ class Renderer(private val context: Context, private val t: Template) {
                     .build()
             )
         }
-        top.addItem(endTop)
-        bottom.addItem(endBottom)
+        if (project.outro) {
+            val (endTop, endBottom) = endCardItems()
+            top.addItem(endTop)
+            bottom.addItem(endBottom)
+        }
 
         val captions = CaptionOverlay(cuts.map { it.caption }, project.hook)
         return Composition.Builder(listOf(top.build(), bottom.build()))
