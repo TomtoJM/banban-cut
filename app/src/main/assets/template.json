@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "width": 1440,
+  "height": 2560,
+  "fps": 30,
+  "cutSeconds": 2.4,
+  "leadSeconds": 0.5,
+  "panStartSeconds": 1.3,
+  "panSeconds": 0.6,
+  "endSeconds": 1.2,
+  "safe": { "top": 398, "bottom": 598, "side": 115 },
+  "timeCaption": { "y": 840, "size": 96, "color": "#FFFFFF" },
+  "hook": { "y": 1280, "size": 78, "maxLines": 2, "color": "#FFFFFF", "text": "오늘 할 일, 진짜 했을까?" },
+  "end": { "title": "Atomic ToDoList", "subtitle": "atomictodolist.pages.dev", "background": "#FFFFFF", "accent": "#3182F6" },
+  "defaultPanToY": 0.2
+}
