@@ -306,7 +306,8 @@ fun CutEditor(
         // ── Bottom half: the check in the app ──
         Text("아래: 앱에서 체크하는 화면 녹화", fontWeight = FontWeight.Bold)
         OutlinedButton(onClick = { pickApp.launch(videoOnly) }) { Text(if (cut.appUri == null) "갤러리에서 고르기" else "다른 녹화 고르기") }
-        if (cut.appUri != null && appInfo != null) {
+        val appUri = cut.appUri
+        if (appUri != null && appInfo != null) {
             val window = Media.windowFraction(appInfo, template)
             val after = cutMs - leadMs
             if (appInfo.durationMs < cutMs) {
@@ -320,9 +321,9 @@ fun CutEditor(
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                WindowPreview(cut.appUri, cut.checkAtMs, Media.clampCenter(cut.blockY, window), window, Accent, "체크 장면", Modifier.weight(1f))
+                WindowPreview(appUri, cut.checkAtMs, Media.clampCenter(cut.blockY, window), window, Accent, "체크 장면", Modifier.weight(1f))
                 WindowPreview(
-                    cut.appUri, cut.checkAtMs + after, Media.clampCenter(cut.panToY, window), window, Color(0xFF8B95A1),
+                    appUri, cut.checkAtMs + after, Media.clampCenter(cut.panToY, window), window, Color(0xFF8B95A1),
                     "그다음 보여줄 곳", Modifier.weight(1f),
                 )
             }
