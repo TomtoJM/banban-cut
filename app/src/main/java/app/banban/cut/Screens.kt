@@ -69,6 +69,8 @@ fun ProjectScreen(
     project: Project,
     update: UpdateState,
     onCheckUpdate: () -> Unit,
+    onInstall: (Update) -> Unit,
+    onOpenInstaller: (java.io.File) -> Unit,
     onChange: (Project) -> Unit,
     onEdit: (Int) -> Unit,
     onAdd: () -> Unit,
@@ -90,7 +92,7 @@ fun ProjectScreen(
     ) {
         Text("반반컷", fontSize = 24.sp, fontWeight = FontWeight.Bold)
 
-        UpdateBar(update, onCheckUpdate)
+        UpdateBar(update, onCheckUpdate, onInstall, onOpenInstaller)
 
         OutlinedTextField(
             value = project.hook,
@@ -177,28 +179,33 @@ fun ProjectScreen(
     }
 }
 
-/** Always says where the app stands: checking, up to date, newer build, or couldn't reach GitHub. */
+/** Always says where the app stands; an update downloads and installs from right here, like a store. */
 @Composable
-private fun UpdateBar(state: UpdateState, onCheck: () -> Unit) {
-    val context = LocalContext.current
+private fun UpdateBar(state: UpdateState, onCheck: () -> Unit, onInstall: (Update) -> Unit, onOpenInstaller: (java.io.File) -> Unit) {
     Card(Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    when (state) {
+                        UpdateState.Checking -> "새 버전 확인 중…"
+                        UpdateState.Latest -> "최신 버전이에요 (${BuildConfig.VERSION_NAME})"
+                        UpdateState.Failed -> "새 버전을 확인하지 못했어요"
+                        is UpdateState.Available -> "새 버전 0.1.${state.update.versionCode}이 있어요"
+                        is UpdateState.Downloading -> "업데이트 받는 중 ${state.percent}%"
+                        is UpdateState.Ready -> "설치 준비 끝"
+                    },
+                    Modifier.weight(1f),
+                    fontSize = 14.sp,
+                )
                 when (state) {
-                    UpdateState.Checking -> "새 버전 확인 중…"
-                    UpdateState.Latest -> "최신 버전이에요 (${BuildConfig.VERSION_NAME})"
-                    UpdateState.Failed -> "새 버전을 확인하지 못했어요"
-                    is UpdateState.Available -> "새 버전 0.1.${state.update.versionCode}이 있어요"
-                },
-                Modifier.weight(1f),
-                fontSize = 14.sp,
-            )
-            when (state) {
-                is UpdateState.Available -> Button(onClick = {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(state.update.apkUrl)))
-                }) { Text("받기") }
-                UpdateState.Checking -> {}
-                else -> TextButton(onClick = onCheck) { Text("다시 확인") }
+                    is UpdateState.Available -> Button(onClick = { onInstall(state.update) }) { Text("업데이트") }
+                    is UpdateState.Ready -> Button(onClick = { onOpenInstaller(state.apk) }) { Text("설치") }
+                    UpdateState.Latest, UpdateState.Failed -> TextButton(onClick = onCheck) { Text("다시 확인") }
+                    else -> {}
+                }
+            }
+            if (state is UpdateState.Downloading) {
+                LinearProgressIndicator(progress = { state.percent / 100f }, modifier = Modifier.fillMaxWidth())
             }
         }
     }

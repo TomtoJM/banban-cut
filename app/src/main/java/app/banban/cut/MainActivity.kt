@@ -17,10 +17,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
@@ -37,6 +39,7 @@ class MainActivity : ComponentActivity() {
                         var editing by remember { mutableStateOf<Int?>(null) }
                         var update by remember { mutableStateOf<UpdateState>(UpdateState.Checking) }
                         var checks by remember { mutableIntStateOf(0) }
+                        val scope = rememberCoroutineScope()
 
                         LaunchedEffect(Unit) {
                             withContext(Dispatchers.IO) { Template.refresh(ctx)?.let { template = it } }
@@ -58,6 +61,15 @@ class MainActivity : ComponentActivity() {
                                 project = project,
                                 update = update,
                                 onCheckUpdate = { checks++ },
+                                onInstall = { u -> scope.launch {
+                                    update = UpdateState.Downloading(u, 0)
+                                    val apk = withContext(Dispatchers.IO) {
+                                        Updater.download(ctx, u) { p -> scope.launch { if (update is UpdateState.Downloading) update = UpdateState.Downloading(u, p) } }
+                                    }
+                                    update = if (apk == null) UpdateState.Failed else UpdateState.Ready(u, apk)
+                                    if (apk != null) Updater.install(this@MainActivity, apk)
+                                } },
+                                onOpenInstaller = { apk -> Updater.install(this@MainActivity, apk) },
                                 onChange = ::change,
                                 onEdit = { editing = it },
                                 onAdd = {
