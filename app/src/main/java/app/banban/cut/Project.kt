@@ -8,7 +8,7 @@ import java.util.UUID
 
 /**
  * One pair: a clip of the action on top, and a screen recording of checking it in the app below.
- * Positions on the recording are fractions of its height (0 = top).
+ * The recording's top part, where the check happens, fills the bottom half.
  */
 data class Cut(
     val id: String = UUID.randomUUID().toString(),
@@ -17,8 +17,6 @@ data class Cut(
     val caption: String = "",
     val appUri: Uri? = null,
     val checkAtMs: Long = 0,
-    val blockY: Float = 0.5f,
-    val panToY: Float = 0.2f,
 ) {
     val ready get() = topUri != null && appUri != null
 
@@ -29,8 +27,6 @@ data class Cut(
         .put("caption", caption)
         .put("appUri", appUri?.toString())
         .put("checkAtMs", checkAtMs)
-        .put("blockY", blockY.toDouble())
-        .put("panToY", panToY.toDouble())
 
     companion object {
         fun fromJson(o: JSONObject) = Cut(
@@ -40,8 +36,6 @@ data class Cut(
             caption = o.optString("caption"),
             appUri = o.optString("appUri").takeIf { it.isNotEmpty() && it != "null" }?.let(Uri::parse),
             checkAtMs = o.optLong("checkAtMs"),
-            blockY = o.optDouble("blockY", 0.5).toFloat(),
-            panToY = o.optDouble("panToY", 0.2).toFloat(),
         )
     }
 }

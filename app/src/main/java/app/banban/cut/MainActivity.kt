@@ -57,7 +57,7 @@ class MainActivity : ComponentActivity() {
                                 onChange = ::change,
                                 onEdit = { editing = it },
                                 onAdd = {
-                                    change(project.copy(cuts = project.cuts + Cut(panToY = template.defaultPanToY)))
+                                    change(project.copy(cuts = project.cuts + Cut()))
                                     editing = project.cuts.lastIndex
                                 },
                                 onOpen = ::open,

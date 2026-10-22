@@ -62,7 +62,4 @@ object Media {
         val f = info.width.toFloat() * t.halfHeight / t.width / info.height
         return f.coerceIn(0.05f, 1f)
     }
-
-    /** Keeps the window inside the recording. */
-    fun clampCenter(y: Float, window: Float): Float = y.coerceIn(window / 2, 1 - window / 2)
 }

@@ -64,14 +64,19 @@ object Overlays {
         c.drawRoundRect(RectF(cx - icon / 2, iconTop, cx + icon / 2, iconTop + icon), icon * 0.27f, icon * 0.27f, fill)
         val dot = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
         c.drawCircle(cx + icon * 0.18f, iconTop + icon * 0.32f, icon * 0.15f, dot)
-        val title = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        // App name, then the call to action as a pill: "Link in bio".
+        val name = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             typeface = bold; textSize = 96f; color = Color.rgb(25, 31, 40); textAlign = Paint.Align.CENTER
         }
-        c.drawText(t.endTitle, cx, cy + 90, title)
-        val sub = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            textSize = 52f; color = Color.rgb(107, 118, 132); textAlign = Paint.Align.CENTER
+        c.drawText(t.endSubtitle, cx, cy + 90, name)
+        val cta = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            typeface = bold; textSize = 64f; color = Color.WHITE; textAlign = Paint.Align.CENTER
         }
-        c.drawText(t.endSubtitle, cx, cy + 170, sub)
+        val label = "${t.endTitle} \u2191"
+        val w = cta.measureText(label) + 112
+        val pillTop = cy + 160
+        c.drawRoundRect(RectF(cx - w / 2, pillTop, cx + w / 2, pillTop + 120), 60f, 60f, fill)
+        c.drawText(label, cx, pillTop + 82, cta)
         val top = Bitmap.createBitmap(full, 0, 0, t.width, t.halfHeight)
         val bottom = Bitmap.createBitmap(full, 0, t.halfHeight, t.width, t.halfHeight)
         full.recycle()

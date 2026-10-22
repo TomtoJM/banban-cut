@@ -13,8 +13,6 @@ data class Template(
     val fps: Int,
     val cutSeconds: Double,
     val leadSeconds: Double,
-    val panStartSeconds: Double,
-    val panSeconds: Double,
     val endSeconds: Double,
     val safeTop: Int,
     val safeBottom: Int,
@@ -31,7 +29,6 @@ data class Template(
     val endSubtitle: String,
     val endBackground: Int,
     val endAccent: Int,
-    val defaultPanToY: Float,
 ) {
     val halfHeight get() = height / 2
 
@@ -51,8 +48,6 @@ data class Template(
                 fps = o.getInt("fps"),
                 cutSeconds = o.getDouble("cutSeconds"),
                 leadSeconds = o.getDouble("leadSeconds"),
-                panStartSeconds = o.getDouble("panStartSeconds"),
-                panSeconds = o.getDouble("panSeconds"),
                 endSeconds = o.getDouble("endSeconds"),
                 safeTop = safe.getInt("top"),
                 safeBottom = safe.getInt("bottom"),
@@ -69,7 +64,6 @@ data class Template(
                 endSubtitle = end.getString("subtitle"),
                 endBackground = Color.parseColor(end.getString("background")),
                 endAccent = Color.parseColor(end.getString("accent")),
-                defaultPanToY = o.getDouble("defaultPanToY").toFloat(),
             )
         }
 

@@ -100,7 +100,7 @@ fun ProjectScreen(
         OutlinedTextField(
             value = project.hook,
             onValueChange = { onChange(project.copy(hook = it)) },
-            label = { Text("훅 문구 (위아래 경계선)") },
+            label = { Text("훅 문구 (영어, 위아래 경계선)") },
             modifier = Modifier.fillMaxWidth(),
             maxLines = template.hookMaxLines,
         )
@@ -320,26 +320,18 @@ fun CutEditor(
                     valueRange = leadMs.toFloat()..(appInfo.durationMs - after).toFloat().coerceAtLeast(leadMs + 1f),
                 )
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                WindowPreview(appUri, cut.checkAtMs, Media.clampCenter(cut.blockY, window), window, Accent, "체크 장면", Modifier.weight(1f))
-                WindowPreview(
-                    appUri, cut.checkAtMs + after, Media.clampCenter(cut.panToY, window), window, Color(0xFF8B95A1),
-                    "그다음 보여줄 곳", Modifier.weight(1f),
-                )
-            }
-            Text("파란 칸에 체크하는 블록이, 회색 칸에 목표 카드의 +1이 들어오게 맞춰주세요.", color = Quiet, fontSize = 13.sp)
-            Text("체크 장면 위치", fontSize = 14.sp)
-            Slider(value = cut.blockY, onValueChange = { cut = cut.copy(blockY = Media.clampCenter(it, window)) })
-            Text("그다음 보여줄 곳", fontSize = 14.sp)
-            Slider(value = cut.panToY, onValueChange = { cut = cut.copy(panToY = Media.clampCenter(it, window)) })
+            Text("녹화의 윗부분이 영상 아래 절반에 들어가요. 파란 칸 안에 체크하는 장면이 보이는지 확인해 주세요.", color = Quiet, fontSize = 13.sp)
+            WindowPreview(appUri, cut.checkAtMs + after / 2, window, Modifier.fillMaxWidth(0.6f).align(Alignment.CenterHorizontally))
         }
         Spacer(Modifier.height(24.dp))
     }
 }
 
-/** The whole recording frame with the part that lands in the bottom half outlined. */
+/** The whole recording frame with the top part that lands in the bottom half outlined. */
 @Composable
-private fun WindowPreview(uri: Uri, atMs: Long, center: Float, window: Float, color: Color, label: String, modifier: Modifier) {
+private fun WindowPreview(uri: Uri, atMs: Long, window: Float, modifier: Modifier) {
+    val center = window / 2
+    val color = Accent
     val bmp = rememberFrame(uri, atMs, 360)
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         val ratio = if (bmp != null) bmp.width.toFloat() / bmp.height else 9f / 19.5f
@@ -353,7 +345,6 @@ private fun WindowPreview(uri: Uri, atMs: Long, center: Float, window: Float, co
                 drawRect(color, Offset(0f, top), Size(size.width, h), style = Stroke(width = 3.dp.toPx()))
             }
         }
-        Text(label, fontSize = 12.sp, color = Quiet, modifier = Modifier.padding(top = 4.dp))
     }
 }
 

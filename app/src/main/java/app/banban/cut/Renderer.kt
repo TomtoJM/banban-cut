@@ -3,7 +3,6 @@ package app.banban.cut
 import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.Matrix
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -17,7 +16,7 @@ import androidx.media3.common.VideoCompositorSettings
 import androidx.media3.common.util.Size
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.BitmapOverlay
-import androidx.media3.effect.MatrixTransformation
+import androidx.media3.effect.Crop
 import androidx.media3.effect.OverlayEffect
 import androidx.media3.effect.Presentation
 import androidx.media3.effect.StaticOverlaySettings
@@ -58,16 +57,14 @@ class Renderer(private val context: Context, private val t: Template) {
                     .setEffects(Effects(emptyList(), listOf(halfFit)))
                     .build()
             )
-            val pan = PanWindow(
-                from = cut.blockY,
-                to = cut.panToY,
-                panStartUs = ((t.panStartSeconds) * 1_000_000).toLong(),
-                panUs = (t.panSeconds * 1_000_000).toLong(),
-            )
+            val appInfo = Media.info(context, cut.appUri!!)
+            val window = if (appInfo != null) Media.windowFraction(appInfo, t) else 0.4f
+            // Keep the recording's top part (crop is in NDC, y = 1 is the top edge); the Presentation then fills the half.
+            val topPart = Crop(-1f, 1f, 1f - 2f * window, 1f)
             bottom.addItem(
                 EditedMediaItem.Builder(clip(cut.appUri!!, (cut.checkAtMs - leadMs).coerceAtLeast(0)))
                     .setRemoveAudio(true)
-                    .setEffects(Effects(emptyList(), listOf(pan, halfFit)))
+                    .setEffects(Effects(emptyList(), listOf(topPart, halfFit)))
                     .build()
             )
         }
@@ -175,30 +172,6 @@ class Renderer(private val context: Context, private val t: Template) {
                 // Anchors are in NDC: y = 0.5 is the middle of the top half.
                 .setBackgroundFrameAnchor(0f, if (inputId == 0) 0.5f else -0.5f)
                 .build()
-    }
-
-    /**
-     * Moves the recording so the window starts on the checked block and, after the check, glides up to
-     * the goal card's +1. Positions are fractions of the recording's height; the Presentation that follows
-     * crops the centre.
-     */
-    private class PanWindow(
-        private val from: Float,
-        private val to: Float,
-        private val panStartUs: Long,
-        private val panUs: Long,
-    ) : MatrixTransformation {
-        // Frame times in a sequence carry earlier items' durations, so time is counted from this clip's first frame.
-        private var firstUs = C.TIME_UNSET
-
-        override fun getMatrix(presentationTimeUs: Long): Matrix {
-            if (firstUs == C.TIME_UNSET) firstUs = presentationTimeUs
-            val p = ((presentationTimeUs - firstUs - panStartUs).toFloat() / panUs).coerceIn(0f, 1f)
-            val eased = p * p * (3 - 2 * p)
-            val y = from + (to - from) * eased
-            // A point y from the top sits at NDC 1 - 2y; shift it to the centre.
-            return Matrix().apply { setTranslate(0f, 2f * y - 1f) }
-        }
     }
 
     /** Caption and hook for whichever cut is on screen; nothing over the end card. */
