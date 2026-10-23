@@ -46,10 +46,20 @@ jobs:
           mkdir -p out
           cp app/build/outputs/apk/release/app-release.apk "out/banban-cut-v${GITHUB_RUN_NUMBER}.apk"
 
+      # Pictures of each screen, so a build can be checked on a computer before installing it.
+      - name: Screenshots
+        continue-on-error: true
+        run: |
+          ./gradlew --no-daemon testDebugUnitTest --tests app.banban.cut.ScreenshotTest
+          mkdir -p shots
+          for f in app/build/screens/*.png; do cp "$f" "shots/screen-$(basename "$f")"; done
+
       - uses: actions/upload-artifact@v4
         with:
           name: banban-cut-v${{ github.run_number }}
-          path: out/*.apk
+          path: |
+            out/*.apk
+            shots/*.png
 
       # Only signed builds from main become a release; the app checks the latest one for updates.
       - name: Publish release
@@ -57,6 +67,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "v${GITHUB_RUN_NUMBER}" out/*.apk \
+          gh release create "v${GITHUB_RUN_NUMBER}" out/*.apk $(ls shots/*.png 2>/dev/null) \
             --title "0.1.${GITHUB_RUN_NUMBER}" \
             --notes "$(git log -1 --pretty=%s)"
