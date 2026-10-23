@@ -51,7 +51,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -394,7 +393,7 @@ fun EditorScreen(
 
 /** While the reel is being made: the number, a bar, and a way out. */
 @Composable
-private fun ExportingScreen(percent: Int, onCancel: () -> Unit) {
+internal fun ExportingScreen(percent: Int, onCancel: () -> Unit) {
     BackHandler(onBack = onCancel)
     Column(
         Modifier.fillMaxSize().background(Tds.White).clickable(remember { MutableInteractionSource() }, null) {}.padding(24.dp),
@@ -414,7 +413,7 @@ private fun ExportingScreen(percent: Int, onCancel: () -> Unit) {
 
 /** Toss-style result: a drawn check, one sentence, one main button. */
 @Composable
-private fun DoneScreen(onShare: () -> Unit, onOpen: () -> Unit, onClose: () -> Unit, onNew: () -> Unit) {
+internal fun DoneScreen(onShare: () -> Unit, onOpen: () -> Unit, onClose: () -> Unit, onNew: () -> Unit) {
     BackHandler(onBack = onClose)
     Column(Modifier.fillMaxSize().background(Tds.White).clickable(remember { MutableInteractionSource() }, null) {}.padding(16.dp)) {
         IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "닫기", tint = Tds.Grey700) }
@@ -425,8 +424,8 @@ private fun DoneScreen(onShare: () -> Unit, onOpen: () -> Unit, onClose: () -> U
         }
         Button(onClick = onShare, modifier = MainButton.fillMaxWidth()) { Text("공유하기", fontSize = 16.sp) }
         Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = onOpen, modifier = MainButton.weight(1f)) { Text("영상 보기", color = Tds.Grey900) }
-            OutlinedButton(onClick = onNew, modifier = MainButton.weight(1f)) { Text("새로 만들기", color = Tds.Grey900) }
+            WeakButton("영상 보기", onOpen, MainButton.weight(1f))
+            WeakButton("새로 만들기", onNew, MainButton.weight(1f))
         }
     }
 }
@@ -544,7 +543,7 @@ private fun CellPanel(
         } else if (info != null) {
             val maxStart = (info.durationMs - cutMs).coerceAtLeast(0)
             if (info.durationMs < cutMs) {
-                Text("영상이 ${template.cutSeconds}초보다 짧아요. 더 긴 영상을 넣어 주세요.", color = Tds.Red600, fontSize = 14.sp)
+                Text("영상이 ${template.cutSeconds}초보다 짧아요. 더 긴 영상을 넣어 주세요.", color = Tds.Red700, fontSize = 14.sp)
             } else {
                 var value by remember(cut.id, cell.top, start) { mutableFloatStateOf(start.toFloat()) }
                 Text("${sec(value.toLong())}부터 ${template.cutSeconds}초를 써요", color = Tds.Grey700, fontSize = 14.sp)
@@ -560,21 +559,30 @@ private fun CellPanel(
             }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedButton(onClick = {
+            WeakButton("◀ 앞으로", {
                 onChange(project.copy(cuts = project.cuts.swap(cell.cut, cell.cut - 1)))
                 onSelect(cell.copy(cut = cell.cut - 1))
-            }, enabled = cell.cut > 0) { Text("◀ 앞으로") }
-            OutlinedButton(onClick = {
+            }, enabled = cell.cut > 0)
+            WeakButton("뒤로 ▶", {
                 onChange(project.copy(cuts = project.cuts.swap(cell.cut, cell.cut + 1)))
                 onSelect(cell.copy(cut = cell.cut + 1))
-            }, enabled = cell.cut < project.cuts.lastIndex) { Text("뒤로 ▶") }
+            }, enabled = cell.cut < project.cuts.lastIndex)
             Spacer(Modifier.weight(1f))
             if (uri != null) TextButton(onClick = {
                 set(if (cell.top) cut.copy(topUri = null, topStartMs = 0) else cut.copy(appUri = null, appStartMs = 0))
             }) { Text("비우기", color = Tds.Grey700) }
-            TextButton(onClick = { onDeleteCut(cell.cut) }) { Text("컷 삭제", color = Tds.Red600) }
+            TextButton(onClick = { onDeleteCut(cell.cut) }) { Text("컷 삭제", color = Tds.Red700) }
         }
     }
+}
+
+/** Toss "weak" button: light grey, dark text, for everything that isn't the main action. */
+@Composable
+private fun WeakButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
+    Button(
+        onClick = onClick, enabled = enabled, modifier = modifier,
+        colors = ButtonDefaults.buttonColors(containerColor = Tds.Grey100, contentColor = Tds.Grey900),
+    ) { Text(text) }
 }
 
 @Composable

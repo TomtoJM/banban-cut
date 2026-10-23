@@ -80,4 +80,9 @@ class ScreenshotTest {
         compose.setContent { Editor(Project(template.hookText, emptyList()), update) }
         shoot("3-start")
     }
+
+    @Test fun done() {
+        compose.setContent { BanbanTheme { DoneScreen({}, {}, {}, {}) } }
+        shoot("4-saved")
+    }
 }

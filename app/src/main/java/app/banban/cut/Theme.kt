@@ -7,7 +7,8 @@ import androidx.compose.ui.graphics.Color
 
 /**
  * Toss (TDS) palette only, as in the MLOS UX guide: blue500 where there is no text on it,
- * blue700 under or as text so it reads at 4.5:1, greys for everything else.
+ * blue700 under or as text so it reads at 4.5:1, greys for everything else. Main button blue,
+ * secondary buttons light grey ("weak"), negative text red700.
  */
 object Tds {
     val Grey50 = Color(0xFFF9FAFB)
@@ -17,11 +18,13 @@ object Tds {
     val Grey500 = Color(0xFF8B95A1)
     val Grey600 = Color(0xFF6B7684)
     val Grey700 = Color(0xFF4E5968)
+    val Grey800 = Color(0xFF333D4B)
     val Grey900 = Color(0xFF191F28)
     val Blue50 = Color(0xFFE8F3FF)
     val Blue500 = Color(0xFF3182F6)
+    val Blue300 = Color(0xFF64A8FF)
     val Blue700 = Color(0xFF1B64DA)
-    val Red600 = Color(0xFFE42939)
+    val Red700 = Color(0xFFD22030)
     val White = Color.White
 }
 
@@ -47,7 +50,11 @@ fun BanbanTheme(content: @Composable () -> Unit) {
             surfaceContainerLow = Tds.White,
             outline = Tds.Grey300,
             outlineVariant = Tds.Grey200,
-            error = Tds.Red600,
+            error = Tds.Red700,
+            // The undo strip is dark, as in Toss.
+            inverseSurface = Tds.Grey800,
+            inverseOnSurface = Tds.White,
+            inversePrimary = Tds.Blue300,
         ),
         content = content,
     )
