@@ -10,9 +10,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.safeDrawingPadding
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -21,7 +19,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.core.content.IntentCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -38,7 +35,7 @@ class MainActivity : ComponentActivity() {
         val ctx = applicationContext
         val preview = PreviewPlayer(this).also { player = it }
         setContent {
-            MaterialTheme(colorScheme = lightColorScheme(primary = Color(0xFF3182F6))) {
+            BanbanTheme {
                 Surface(Modifier.fillMaxSize()) {
                     Box(Modifier.safeDrawingPadding()) {
                         var template by remember { mutableStateOf(Template.load(ctx)) }

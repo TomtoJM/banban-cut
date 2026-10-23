@@ -48,7 +48,7 @@ class ScreenshotTest {
 
     @Composable
     private fun Themed(content: @Composable () -> Unit) {
-        MaterialTheme(colorScheme = lightColorScheme(primary = Color(0xFF3182F6))) { Surface(content = content) }
+        BanbanTheme { Surface(content = content) }
     }
 
     @Composable
@@ -57,7 +57,7 @@ class ScreenshotTest {
             template = template, project = project, hooks = listOf(template.hookText, "POV: you actually did it."),
             update = update, play = PlayState(positionMs = 2100), lengthMs = 7200,
             // The real preview is a video surface; a stand-in shows where it sits.
-            preview = { m -> Box(m.background(Color(0xFF2A2F37))) { Text("미리보기", color = Color.White, modifier = Modifier.align(Alignment.Center)) } },
+            preview = { m -> Box(m.background(Color(0xFF333D4B))) { Text("미리보기", color = Color.White, modifier = Modifier.align(Alignment.Center)) } },
             selected = selected, onSelect = {}, onChange = {}, onHooks = {}, onPlayPause = {}, onSeek = {},
             onCheckUpdate = {}, onInstall = {}, onExportStarted = {}, onOpen = {}, onShare = {},
         )
