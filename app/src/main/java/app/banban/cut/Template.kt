@@ -17,9 +17,6 @@ data class Template(
     val safeTop: Int,
     val safeBottom: Int,
     val safeSide: Int,
-    val timeY: Int,
-    val timeSize: Int,
-    val timeColor: Int,
     val hookY: Int,
     val hookSize: Int,
     val hookMaxLines: Int,
@@ -39,7 +36,6 @@ data class Template(
         fun parse(json: String): Template {
             val o = JSONObject(json)
             val safe = o.getJSONObject("safe")
-            val time = o.getJSONObject("timeCaption")
             val hook = o.getJSONObject("hook")
             val end = o.getJSONObject("end")
             return Template(
@@ -52,9 +48,6 @@ data class Template(
                 safeTop = safe.getInt("top"),
                 safeBottom = safe.getInt("bottom"),
                 safeSide = safe.getInt("side"),
-                timeY = time.getInt("y"),
-                timeSize = time.getInt("size"),
-                timeColor = Color.parseColor(time.getString("color")),
                 hookY = hook.getInt("y"),
                 hookSize = hook.getInt("size"),
                 hookMaxLines = hook.getInt("maxLines"),

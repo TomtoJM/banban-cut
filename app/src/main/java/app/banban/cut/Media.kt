@@ -12,7 +12,13 @@ import java.util.TimeZone
 data class VideoInfo(val durationMs: Long, val width: Int, val height: Int, val takenAt: Long?)
 
 object Media {
-    fun info(context: Context, uri: Uri): VideoInfo? = runCatching {
+    private val infos = java.util.concurrent.ConcurrentHashMap<String, VideoInfo>()
+
+    /** Reading metadata is slow, and the editor asks often; answers are kept per video. */
+    fun info(context: Context, uri: Uri): VideoInfo? =
+        infos[uri.toString()] ?: read(context, uri)?.also { infos[uri.toString()] = it }
+
+    private fun read(context: Context, uri: Uri): VideoInfo? = runCatching {
         retrieve(context, uri) { r ->
             val dur = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLong() ?: 0
             var w = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toInt() ?: 0
@@ -48,10 +54,6 @@ object Media {
         val fmt = SimpleDateFormat("yyyyMMdd'T'HHmmss", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }
         return runCatching { fmt.parse(raw.take(15))?.time }.getOrNull()?.takeIf { it > 0 }
     }
-
-    /** "7:45am", the caption style from the reference reel. */
-    fun clock(epochMs: Long): String =
-        SimpleDateFormat("h:mma", Locale.US).format(epochMs).lowercase(Locale.US)
 
     /**
      * Share of the recording's height that fits in the bottom half when the recording fills its width.

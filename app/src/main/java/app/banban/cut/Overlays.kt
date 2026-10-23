@@ -15,15 +15,10 @@ import android.text.TextUtils
 object Overlays {
     private val bold: Typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
 
-    /** Full-frame transparent layer: time caption in the top half, hook on the seam. */
-    fun captions(t: Template, caption: String, hook: String): Bitmap {
+    /** Full-frame transparent layer with the hook on the seam. */
+    fun hook(t: Template, hook: String): Bitmap {
         val bmp = Bitmap.createBitmap(t.width, t.height, Bitmap.Config.ARGB_8888)
-        val c = Canvas(bmp)
-        if (caption.isNotBlank()) {
-            val p = textPaint(t.timeSize, t.timeColor)
-            c.drawText(caption, t.width / 2f, t.timeY + t.timeSize / 3f, p)
-        }
-        if (hook.isNotBlank()) drawHook(c, t, hook)
+        if (hook.isNotBlank()) drawHook(Canvas(bmp), t, hook)
         return bmp
     }
 

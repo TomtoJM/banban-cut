@@ -33,39 +33,35 @@ import java.io.FileOutputStream
 
 /**
  * Builds the reel: sequence 0 is the top half (shots, then the end card's top), sequence 1 the
- * bottom half (app recordings, then the end card's bottom). The end card is optional. The compositor stacks them on a
- * template-sized canvas and a bitmap overlay adds the captions.
+ * bottom half (app recordings, then the end card's bottom). The end card is optional. The
+ * compositor stacks them on a template-sized canvas and a bitmap overlay adds the hook. The same
+ * composition feeds the in-app preview and the export, so what plays is what gets saved.
  */
 @OptIn(UnstableApi::class)
 class Renderer(private val context: Context, private val t: Template) {
     private val cutUs = (t.cutSeconds * 1_000_000).toLong()
     private val cutMs = cutUs / 1000
-    private val leadMs = (t.leadSeconds * 1000).toLong()
     private var transformer: Transformer? = null
 
-    fun build(project: Project): Composition {
+    /** Total length of the reel in milliseconds. */
+    fun lengthMs(project: Project): Long =
+        project.cuts.count { it.ready } * cutMs + if (project.outro) (t.endSeconds * 1000).toLong() else 0
+
+    /** Reads video metadata, so call off the main thread. Null when no cut has both cells filled. */
+    fun build(project: Project): Composition? {
         val cuts = project.cuts.filter { it.ready }
+        if (cuts.isEmpty()) return null
         val halfFit = Presentation.createForWidthAndHeight(t.width, t.halfHeight, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP)
 
         val top = EditedMediaItemSequence.Builder(setOf(C.TRACK_TYPE_VIDEO))
         val bottom = EditedMediaItemSequence.Builder(setOf(C.TRACK_TYPE_VIDEO))
         for (cut in cuts) {
-            top.addItem(
-                EditedMediaItem.Builder(clip(cut.topUri!!, cut.topStartMs))
-                    .setRemoveAudio(true)
-                    .setEffects(Effects(emptyList(), listOf(halfFit)))
-                    .build()
-            )
+            top.addItem(item(cut.topUri!!, cut.topStartMs, listOf(halfFit)))
             val appInfo = Media.info(context, cut.appUri!!)
             val window = if (appInfo != null) Media.windowFraction(appInfo, t) else 0.4f
             // Keep the recording's top part (crop is in NDC, y = 1 is the top edge); the Presentation then fills the half.
             val topPart = Crop(-1f, 1f, 1f - 2f * window, 1f)
-            bottom.addItem(
-                EditedMediaItem.Builder(clip(cut.appUri!!, (cut.checkAtMs - leadMs).coerceAtLeast(0)))
-                    .setRemoveAudio(true)
-                    .setEffects(Effects(emptyList(), listOf(topPart, halfFit)))
-                    .build()
-            )
+            bottom.addItem(item(cut.appUri, cut.appStartMs, listOf(topPart, halfFit)))
         }
         if (project.outro) {
             val (endTop, endBottom) = endCardItems()
@@ -73,22 +69,33 @@ class Renderer(private val context: Context, private val t: Template) {
             bottom.addItem(endBottom)
         }
 
-        val captions = CaptionOverlay(cuts.map { it.caption }, project.hook)
+        val overlay = HookOverlay(Overlays.hook(t, project.hook), cuts.size * cutUs)
         return Composition.Builder(listOf(top.build(), bottom.build()))
             .setVideoCompositorSettings(StackedHalves(t))
-            .setEffects(Effects(emptyList(), listOf(OverlayEffect(listOf(captions)))))
+            .setEffects(Effects(emptyList(), listOf(OverlayEffect(listOf(overlay)))))
             .build()
     }
 
-    private fun clip(uri: Uri, startMs: Long): MediaItem = MediaItem.Builder()
-        .setUri(uri)
-        .setClippingConfiguration(
-            MediaItem.ClippingConfiguration.Builder()
-                .setStartPositionMs(startMs)
-                .setEndPositionMs(startMs + cutMs)
-                .build()
-        )
-        .build()
+    /** One cut length of a video from [startMs], kept inside the video so both halves stay in step. */
+    private fun item(uri: Uri, startMs: Long, effects: List<androidx.media3.common.Effect>): EditedMediaItem {
+        val durationMs = Media.info(context, uri)?.durationMs ?: 0
+        val start = startMs.coerceAtMost((durationMs - cutMs).coerceAtLeast(0))
+        val clip = MediaItem.Builder()
+            .setUri(uri)
+            .setClippingConfiguration(
+                MediaItem.ClippingConfiguration.Builder()
+                    .setStartPositionMs(start)
+                    .setEndPositionMs(start + cutMs)
+                    .build()
+            )
+            .build()
+        return EditedMediaItem.Builder(clip)
+            .setRemoveAudio(true)
+            .setEffects(Effects(emptyList(), effects))
+            // The preview player needs the source length up front; the export reads it from the file.
+            .setDurationUs(maxOf(durationMs, start + cutMs) * 1000)
+            .build()
+    }
 
     private fun endCardItems(): Pair<EditedMediaItem, EditedMediaItem> {
         val (a, b) = Overlays.endCard(t)
@@ -100,14 +107,14 @@ class Renderer(private val context: Context, private val t: Template) {
                 .setUri(Uri.fromFile(f))
                 .setImageDurationMs((t.endSeconds * 1000).toLong())
                 .build()
-            return EditedMediaItem.Builder(mi).setFrameRate(t.fps).build()
+            return EditedMediaItem.Builder(mi).setFrameRate(t.fps).setDurationUs((t.endSeconds * 1_000_000).toLong()).build()
         }
         return item(a, "end-top.png") to item(b, "end-bottom.png")
     }
 
     /** Exports to a cache file, then copies it into Movies/BanbanCut. Callbacks run on the main thread. */
     fun export(
-        project: Project,
+        composition: Composition,
         onProgress: (Int) -> Unit,
         onDone: (Uri) -> Unit,
         onError: (String) -> Unit,
@@ -133,7 +140,7 @@ class Renderer(private val context: Context, private val t: Template) {
             })
             .build()
         transformer = tr
-        tr.start(build(project), out.absolutePath)
+        tr.start(composition, out.absolutePath)
         main.post(object : Runnable {
             override fun run() {
                 val current = transformer ?: return
@@ -176,19 +183,10 @@ class Renderer(private val context: Context, private val t: Template) {
                 .build()
     }
 
-    /** Caption and hook for whichever cut is on screen; nothing over the end card. */
-    private inner class CaptionOverlay(private val captions: List<String>, private val hook: String) : BitmapOverlay() {
-        private var index = -1
-        private var current: Bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+    /** The hook over every cut; nothing over the end card. */
+    private class HookOverlay(private val hook: Bitmap, private val untilUs: Long) : BitmapOverlay() {
+        private val blank = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
 
-        override fun getBitmap(presentationTimeUs: Long): Bitmap {
-            val i = (presentationTimeUs / cutUs).toInt()
-            if (i != index) {
-                index = i
-                current = if (i in captions.indices) Overlays.captions(t, captions[i], hook)
-                else Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
-            }
-            return current
-        }
+        override fun getBitmap(presentationTimeUs: Long): Bitmap = if (presentationTimeUs < untilUs) hook else blank
     }
 }

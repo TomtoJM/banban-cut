@@ -24,25 +24,32 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.core.content.IntentCompat
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     private var update by mutableStateOf<UpdateState>(UpdateState.Checking)
+    private var player: PreviewPlayer? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val ctx = applicationContext
+        val preview = PreviewPlayer(this).also { player = it }
         setContent {
             MaterialTheme(colorScheme = lightColorScheme(primary = Color(0xFF3182F6))) {
                 Surface(Modifier.fillMaxSize()) {
                     Box(Modifier.safeDrawingPadding()) {
                         var template by remember { mutableStateOf(Template.load(ctx)) }
                         var project by remember { mutableStateOf(Project.load(ctx, template.hookText)) }
-                        var editing by remember { mutableStateOf<Int?>(null) }
+                        var hooks by remember { mutableStateOf(Hooks.load(ctx, template.hookText)) }
+                        var selected by remember { mutableStateOf<Cell?>(null) }
+                        var play by remember { mutableStateOf(PlayState()) }
                         var checks by remember { mutableIntStateOf(0) }
                         val scope = rememberCoroutineScope()
+                        val renderer = remember(template) { Renderer(ctx, template) }
+                        val cutMs = (template.cutSeconds * 1000).toLong()
 
                         LaunchedEffect(Unit) {
                             withContext(Dispatchers.IO) {
@@ -54,52 +61,77 @@ class MainActivity : ComponentActivity() {
                             update = UpdateState.Checking
                             update = withContext(Dispatchers.IO) { Updater.check() }
                         }
+                        LaunchedEffect(preview) {
+                            preview.onError = { play = play.copy(error = it) }
+                            while (true) {
+                                play = play.copy(playing = preview.playing, positionMs = preview.positionMs)
+                                delay(100)
+                            }
+                        }
+                        // Rebuild the preview shortly after an edit settles, and keep playing from the same spot.
+                        LaunchedEffect(project.cuts, project.hook, project.outro, template) {
+                            delay(400)
+                            val composition = withContext(Dispatchers.IO) { renderer.build(project) }
+                            if (composition != null) {
+                                play = play.copy(error = null)
+                                preview.show(composition, preview.positionMs.coerceAtMost(renderer.lengthMs(project) - 1))
+                                preview.play()
+                            } else {
+                                preview.pause()
+                            }
+                        }
 
                         fun change(p: Project) {
                             project = p
                             Project.save(ctx, p)
                         }
 
-                        val index = editing
-                        if (index == null) {
-                            ProjectScreen(
-                                template = template,
-                                project = project,
-                                update = update,
-                                onCheckUpdate = { checks++ },
-                                onInstall = { u -> scope.launch {
-                                    update = UpdateState.Downloading(u, 0)
-                                    val ok = withContext(Dispatchers.IO) {
-                                        Updater.downloadAndInstall(ctx, u) { p -> scope.launch { if (update is UpdateState.Downloading) update = UpdateState.Downloading(u, p) } }
-                                    }
-                                    update = if (ok) UpdateState.Installing(u) else UpdateState.Failed
-                                } },
-                                onChange = ::change,
-                                onEdit = { editing = it },
-                                onAdd = {
-                                    change(project.copy(cuts = project.cuts + Cut()))
-                                    editing = project.cuts.lastIndex
-                                },
-                                onRestart = { change(project.copy(cuts = emptyList())) },
-                                onOpen = ::open,
-                                onShare = ::share,
-                            )
-                        } else {
-                            CutEditor(
-                                template = template,
-                                number = index + 1,
-                                initial = project.cuts[index],
-                                onSave = { cut ->
-                                    change(project.copy(cuts = project.cuts.toMutableList().also { it[index] = cut }))
-                                    editing = null
-                                },
-                                onCancel = { editing = null },
-                            )
-                        }
+                        EditorScreen(
+                            template = template,
+                            project = project,
+                            hooks = hooks,
+                            update = update,
+                            play = play,
+                            lengthMs = renderer.lengthMs(project),
+                            preview = { m -> PreviewSurface(preview, m) },
+                            selected = selected,
+                            onSelect = { cell ->
+                                selected = cell
+                                // Jump the preview to the cut being edited.
+                                if (cell != null && project.cuts.getOrNull(cell.cut)?.ready == true) {
+                                    preview.seekTo(project.cuts.take(cell.cut).count { it.ready } * cutMs)
+                                }
+                            },
+                            onChange = ::change,
+                            onHooks = { hooks = it; Hooks.save(ctx, it) },
+                            onPlayPause = { if (preview.playing) preview.pause() else preview.play() },
+                            onSeek = preview::seekTo,
+                            onCheckUpdate = { checks++ },
+                            onInstall = { u -> scope.launch {
+                                update = UpdateState.Downloading(u, 0)
+                                val ok = withContext(Dispatchers.IO) {
+                                    Updater.downloadAndInstall(ctx, u) { p -> scope.launch { if (update is UpdateState.Downloading) update = UpdateState.Downloading(u, p) } }
+                                }
+                                update = if (ok) UpdateState.Installing(u) else UpdateState.Failed
+                            } },
+                            onExportStarted = preview::pause,
+                            onOpen = ::open,
+                            onShare = ::share,
+                        )
                     }
                 }
             }
         }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        player?.pause()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        player?.release()
     }
 
     /** The installer's answer: show its confirm screen, or note that the update didn't go through. */

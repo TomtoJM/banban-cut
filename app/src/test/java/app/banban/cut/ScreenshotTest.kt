@@ -1,7 +1,12 @@
 package app.banban.cut
 
 import android.net.Uri
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.material3.Surface
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
@@ -23,19 +28,22 @@ import java.io.File
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-@Config(sdk = [34], qualifiers = "w412dp-h1400dp-xxhdpi")
+@Config(sdk = [34], qualifiers = "w412dp-h915dp-xxhdpi")
 class ScreenshotTest {
     @get:Rule val compose = createComposeRule()
 
     private val template = Template.parse(File("src/main/assets/template.json").readText())
 
+    private fun uri(n: Int) = Uri.parse("content://sample/$n")
+
     private val sample = Project(
         hook = template.hookText,
         cuts = listOf(
-            Cut(topUri = Uri.parse("content://sample/1"), caption = "7:45am", appUri = Uri.parse("content://sample/2")),
-            Cut(topUri = Uri.parse("content://sample/3"), caption = "8:30am", appUri = Uri.parse("content://sample/4")),
-            Cut(topUri = Uri.parse("content://sample/5"), caption = "12:10pm"),
+            Cut(topUri = uri(1), appUri = uri(2)),
+            Cut(topUri = uri(3), appUri = uri(4)),
+            Cut(topUri = uri(5)),
         ),
+        pool = (1..6).map(::uri),
     )
 
     @Composable
@@ -43,27 +51,33 @@ class ScreenshotTest {
         MaterialTheme(colorScheme = lightColorScheme(primary = Color(0xFF3182F6))) { Surface(content = content) }
     }
 
+    @Composable
+    private fun Editor(project: Project, update: UpdateState = UpdateState.Latest, selected: Cell? = null) = Themed {
+        EditorScreen(
+            template = template, project = project, hooks = listOf(template.hookText, "POV: you actually did it."),
+            update = update, play = PlayState(positionMs = 2100), lengthMs = 7200,
+            // The real preview is a video surface; a stand-in shows where it sits.
+            preview = { m -> Box(m.background(Color(0xFF2A2F37))) { Text("미리보기", color = Color.White, modifier = Modifier.align(Alignment.Center)) } },
+            selected = selected, onSelect = {}, onChange = {}, onHooks = {}, onPlayPause = {}, onSeek = {},
+            onCheckUpdate = {}, onInstall = {}, onExportStarted = {}, onOpen = {}, onShare = {},
+        )
+    }
+
     private fun shoot(name: String) = compose.onRoot().captureRoboImage("build/screens/$name.png")
 
-    @Test fun home() {
-        compose.setContent {
-            Themed { ProjectScreen(template, sample, UpdateState.Latest, {}, {}, {}, {}, {}, {}, {}, {}) }
-        }
-        shoot("1-home")
+    @Test fun editor() {
+        compose.setContent { Editor(sample) }
+        shoot("1-editor")
     }
 
-    @Test fun homeEmpty() {
-        compose.setContent {
-            val update = UpdateState.Available(Update(BuildConfig.VERSION_CODE + 1, "", ""))
-            Themed { ProjectScreen(template, Project(template.hookText, emptyList()), update, {}, {}, {}, {}, {}, {}, {}, {}) }
-        }
-        shoot("2-empty-with-update")
+    @Test fun editorCellSelected() {
+        compose.setContent { Editor(sample, selected = Cell(2, top = false)) }
+        shoot("2-cell-selected")
     }
 
-    @Test fun cutEditor() {
-        compose.setContent {
-            Themed { CutEditor(template, 1, Cut(caption = "7:45am"), {}, {}) }
-        }
-        shoot("3-cut-editor")
+    @Test fun empty() {
+        val update = UpdateState.Available(Update(BuildConfig.VERSION_CODE + 1, "", ""))
+        compose.setContent { Editor(Project(template.hookText, emptyList()), update) }
+        shoot("3-start")
     }
 }

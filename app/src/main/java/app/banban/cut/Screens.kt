@@ -1,37 +1,47 @@
 package app.banban.cut
 
-import android.content.Context
-import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
@@ -39,7 +49,10 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -48,14 +61,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
@@ -65,146 +76,268 @@ import java.util.Locale
 
 private val Accent = Color(0xFF3182F6)
 private val Quiet = Color(0xFF6B7684)
+private val Danger = Color(0xFFF04452)
+private val Film = Color(0xFF1B1F27)
 
+/** What the preview player is doing, for the play bar. */
+data class PlayState(val playing: Boolean = false, val positionMs: Long = 0, val error: String? = null)
+
+/**
+ * The one editing screen, laid out like a phone video editor: the reel playing on top, the cuts as
+ * a strip of top/bottom cells, and the picked videos in a tray at the bottom. Pick a cell, then tap
+ * a video in the tray to put it there.
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun ProjectScreen(
+fun EditorScreen(
     template: Template,
     project: Project,
+    hooks: List<String>,
     update: UpdateState,
+    play: PlayState,
+    lengthMs: Long,
+    preview: @Composable (Modifier) -> Unit,
+    selected: Cell?,
+    onSelect: (Cell?) -> Unit,
+    onChange: (Project) -> Unit,
+    onHooks: (List<String>) -> Unit,
+    onPlayPause: () -> Unit,
+    onSeek: (Long) -> Unit,
     onCheckUpdate: () -> Unit,
     onInstall: (Update) -> Unit,
-    onChange: (Project) -> Unit,
-    onEdit: (Int) -> Unit,
-    onAdd: () -> Unit,
-    onRestart: () -> Unit,
+    onExportStarted: () -> Unit,
     onOpen: (Uri) -> Unit,
     onShare: (Uri) -> Unit,
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val renderer = remember(template) { Renderer(context, template) }
+    val cutMs = (template.cutSeconds * 1000).toLong()
+    var importing by remember { mutableStateOf(false) }
     var progress by remember { mutableStateOf<Int?>(null) }
     var result by remember { mutableStateOf<Uri?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var confirmRestart by remember { mutableStateOf(false) }
-    val renderer = remember(template) { Renderer(context, template) }
-    val ready = project.cuts.count { it.ready }
-    val scope = rememberCoroutineScope()
-    var importing by remember { mutableStateOf(false) }
-    var imported by remember { mutableStateOf<String?>(null) }
-    val pickMany = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(60)) { uris ->
-        if (uris.isNotEmpty()) scope.launch {
-            importing = true
-            val r = withContext(Dispatchers.IO) { Import.cuts(context, uris, template) }
-            importing = false
-            onChange(project.copy(cuts = project.cuts + r.cuts))
-            imported = "촬영본 ${r.shots}개, 앱 녹화 ${r.recordings}개로 컷 ${r.cuts.size}개를 만들었어요." +
-                if (r.shots != r.recordings) " 개수가 달라서 빈 칸이 있는 컷이 있어요." else ""
+    val recordings = remember { mutableStateMapOf<Uri, Boolean>() }
+
+    LaunchedEffect(project.pool) {
+        val unknown = project.pool.filter { it !in recordings }
+        if (unknown.isNotEmpty()) {
+            val found = withContext(Dispatchers.IO) { unknown.associateWith { Import.isRecording(context, it) } }
+            recordings.putAll(found)
         }
     }
 
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        Text("반반컷", fontSize = 24.sp, fontWeight = FontWeight.Bold)
+    val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(60)) { uris ->
+        if (uris.isNotEmpty()) scope.launch {
+            importing = true
+            val added = uris.filter { it !in project.pool }
+            val draft = withContext(Dispatchers.IO) {
+                Import.keep(context, added)
+                if (project.cuts.isEmpty()) Import.draft(context, added) else emptyList()
+            }
+            importing = false
+            onChange(project.copy(pool = project.pool + added, cuts = project.cuts + draft))
+        }
+    }
+    fun pickVideos() = pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
 
-        UpdateBar(update, onCheckUpdate, onInstall)
+    /** Puts a tray video in the picked cell, or in the first empty cell that suits it. */
+    fun place(uri: Uri) {
+        val asRecording = recordings[uri] == true
+        val target = selected
+            ?: project.cuts.indexOfFirst { if (asRecording) it.appUri == null else it.topUri == null }
+                .takeIf { it >= 0 }?.let { Cell(it, top = !asRecording) }
+            ?: Cell(project.cuts.size, top = !asRecording)
+        val cuts = project.cuts.toMutableList()
+        if (target.cut == cuts.size) cuts += Cut()
+        cuts[target.cut] = if (target.top) cuts[target.cut].copy(topUri = uri, topStartMs = 0)
+        else cuts[target.cut].copy(appUri = uri, appStartMs = 0)
+        onChange(project.copy(cuts = cuts))
+        // Move on to the next empty cell, so filling a reel is tap, tap, tap.
+        val next = cuts.indices.flatMap { listOf(Cell(it, true), Cell(it, false)) }
+            .firstOrNull { c -> (if (c.top) cuts[c.cut].topUri else cuts[c.cut].appUri) == null }
+        onSelect(next)
+    }
 
-        OutlinedTextField(
-            value = project.hook,
-            onValueChange = { onChange(project.copy(hook = it)) },
-            label = { Text("훅 문구 (영어, 위아래 경계선)") },
-            modifier = Modifier.fillMaxWidth(),
-            maxLines = template.hookMaxLines,
-        )
+    Column(Modifier.fillMaxSize()) {
+        // ── Top bar ──
+        Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("반반컷", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            Text("  ${BuildConfig.VERSION_NAME}", color = Quiet, fontSize = 12.sp, modifier = Modifier.weight(1f))
+            UpdateChip(update, onCheckUpdate, onInstall)
+            if (project.cuts.isNotEmpty() || project.pool.isNotEmpty()) {
+                TextButton(onClick = { confirmRestart = true }) { Text("새로 시작") }
+            }
+        }
 
-        project.cuts.forEachIndexed { i, cut ->
-            CutRow(
-                number = i + 1,
-                cut = cut,
-                onClick = { onEdit(i) },
-                onUp = if (i > 0) ({ onChange(project.copy(cuts = project.cuts.swap(i, i - 1))) }) else null,
-                onDown = if (i < project.cuts.lastIndex) ({ onChange(project.copy(cuts = project.cuts.swap(i, i + 1))) }) else null,
-                onDelete = { onChange(project.copy(cuts = project.cuts.filterIndexed { j, _ -> j != i })) },
+        // ── Preview ──
+        Box(Modifier.weight(1f).fillMaxWidth().background(Color.Black), contentAlignment = Alignment.Center) {
+            if (project.cuts.any { it.ready }) {
+                Box(Modifier.fillMaxHeight().aspectRatio(9f / 16f)) { preview(Modifier.fillMaxSize()) }
+                play.error?.let {
+                    Text("미리보기를 띄우지 못했어요: $it", color = Color.White, fontSize = 12.sp,
+                        modifier = Modifier.align(Alignment.BottomCenter).padding(8.dp))
+                }
+            } else {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        if (project.pool.isEmpty()) "찍은 영상과 앱 화면 녹화를\n한 번에 골라 주세요"
+                        else "아래 칸을 누르고, 맨 아래 영상을 눌러 채워 주세요",
+                        color = Color.White, textAlign = TextAlign.Center,
+                    )
+                    if (project.pool.isEmpty()) {
+                        Button(onClick = ::pickVideos, enabled = !importing) { Text(if (importing) "불러오는 중…" else "영상 고르기") }
+                    }
+                }
+            }
+        }
+
+        // ── Play bar ──
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onPlayPause, enabled = lengthMs > 0) {
+                if (play.playing) Text("❚❚", fontWeight = FontWeight.Bold) else Icon(Icons.Filled.PlayArrow, "재생")
+            }
+            Text("${sec(play.positionMs)} / ${sec(lengthMs)}", fontSize = 13.sp, color = Quiet)
+            Slider(
+                value = play.positionMs.coerceIn(0, lengthMs.coerceAtLeast(1)).toFloat(),
+                onValueChange = { onSeek(it.toLong()) },
+                valueRange = 0f..lengthMs.coerceAtLeast(1).toFloat(),
+                enabled = lengthMs > 0,
+                modifier = Modifier.weight(1f).padding(start = 8.dp),
             )
         }
 
-        Button(
-            onClick = { pickMany.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)) },
-            enabled = !importing,
-            modifier = Modifier.fillMaxWidth().height(52.dp),
-        ) { Text(if (importing) "불러오는 중…" else "영상 한 번에 불러오기") }
-        Text(
-            imported ?: "촬영본과 앱 녹화를 모두 한 번에 골라주세요. 화면 녹화는 아래, 나머지는 위로 가고, 찍은 순서대로 짝지어요.",
-            color = Quiet,
-            fontSize = 13.sp,
-        )
-        OutlinedButton(onClick = onAdd, modifier = Modifier.fillMaxWidth()) { Text("+ 컷 하나 추가") }
+        Column(Modifier.padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            HookField(project.hook, hooks, template.hookMaxLines, { onChange(project.copy(hook = it)) }, onHooks)
 
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("마지막에 Link in bio 화면 넣기")
-                Text("끄면 영상이 끊김 없이 다시 돌아요. 링크 안내는 게시글 글에 써 주세요.", color = Quiet, fontSize = 12.sp)
+            // ── Cuts: one column per cut, top cell over bottom cell ──
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                itemsIndexed(project.cuts, key = { _, c -> c.id }) { i, cut ->
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        CellBox(cut.topUri, cut.topStartMs, selected == Cell(i, true)) { onSelect(Cell(i, true)) }
+                        CellBox(cut.appUri, cut.appStartMs, selected == Cell(i, false)) { onSelect(Cell(i, false)) }
+                        Text("${i + 1}", fontSize = 11.sp, color = Quiet)
+                    }
+                }
+                item {
+                    Box(
+                        Modifier.width(56.dp).height(103.dp).clip(RoundedCornerShape(6.dp))
+                            .border(1.dp, Quiet.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
+                            .clickable {
+                                onChange(project.copy(cuts = project.cuts + Cut()))
+                                onSelect(Cell(project.cuts.size, true))
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) { Icon(Icons.Filled.Add, "컷 추가", tint = Quiet) }
+                }
             }
-            Switch(checked = project.outro, onCheckedChange = { onChange(project.copy(outro = it)) })
+
+            val cell = selected?.takeIf { it.cut in project.cuts.indices }
+            if (cell != null) {
+                CellPanel(template, project, cell, cutMs, onChange, onSelect)
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("마지막에 Link in bio 화면", fontSize = 13.sp, modifier = Modifier.weight(1f))
+                    Switch(checked = project.outro, onCheckedChange = { onChange(project.copy(outro = it)) })
+                }
+            }
         }
 
-        HorizontalDivider()
+        HorizontalDivider(Modifier.padding(top = 6.dp))
 
-        val seconds = ready * template.cutSeconds + if (project.outro) template.endSeconds else 0.0
-        Text(
-            if (ready == 0) "위 영상과 앱 녹화를 모두 고른 컷이 있어야 만들 수 있어요."
-            else "컷 ${ready}개 · ${"%.1f".format(Locale.US, seconds)}초 · ${template.width}×${template.height}",
-            color = Quiet,
-        )
-        val p = progress
-        if (p != null) {
-            LinearProgressIndicator(progress = { p / 100f }, modifier = Modifier.fillMaxWidth())
-            Text("만드는 중 $p%", color = Quiet)
-            TextButton(onClick = { renderer.cancel(); progress = null }) { Text("그만두기") }
-        } else {
+        // ── Tray: every picked video, plus add and save ──
+        Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            FilledIconButton(onClick = ::pickVideos, enabled = !importing) { Icon(Icons.Filled.Add, "영상 더 고르기") }
+            LazyRow(Modifier.weight(1f).padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                itemsIndexed(project.pool, key = { _, u -> u.toString() }) { _, uri ->
+                    var menu by remember { mutableStateOf(false) }
+                    val used = project.cuts.any { it.topUri == uri || it.appUri == uri }
+                    Box {
+                        Box(Modifier.size(48.dp, 64.dp).clip(RoundedCornerShape(6.dp))
+                            .combinedClickable(onClick = { place(uri) }, onLongClick = { menu = true })) {
+                            Thumb(uri, 0, Modifier.fillMaxSize())
+                            if (recordings[uri] == true) Tag("녹화", Modifier.align(Alignment.BottomStart))
+                            if (used) Tag("✓", Modifier.align(Alignment.TopEnd))
+                        }
+                        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                            DropdownMenuItem(text = { Text("목록에서 빼기") }, onClick = {
+                                menu = false
+                                onChange(project.copy(pool = project.pool - uri))
+                            })
+                        }
+                    }
+                }
+            }
             Button(
                 onClick = {
                     error = null
                     result = null
                     progress = 0
-                    runCatching {
-                        renderer.export(
-                            project,
-                            onProgress = { progress = it },
-                            onDone = { progress = null; result = it },
-                            onError = { progress = null; error = it },
-                        )
-                    }.onFailure { progress = null; error = "영상을 만들지 못했어요: ${it.message}" }
+                    onExportStarted()
+                    scope.launch {
+                        val composition = withContext(Dispatchers.IO) { renderer.build(project) }
+                        if (composition == null) {
+                            progress = null
+                            error = "위아래 칸이 모두 찬 컷이 있어야 저장할 수 있어요."
+                            return@launch
+                        }
+                        runCatching {
+                            renderer.export(
+                                composition,
+                                onProgress = { progress = it },
+                                onDone = { progress = null; result = it },
+                                onError = { progress = null; error = it },
+                            )
+                        }.onFailure { progress = null; error = "영상을 만들지 못했어요: ${it.message}" }
+                    }
                 },
-                enabled = ready > 0,
-                modifier = Modifier.fillMaxWidth().height(52.dp),
-            ) { Text("영상 만들기") }
+                enabled = lengthMs > 0 && progress == null,
+            ) { Text("저장") }
         }
-        error?.let { Text(it, color = Color(0xFFF04452)) }
-        result?.let { uri ->
-            Text("갤러리의 Movies/BanbanCut에 저장했어요.", color = Quiet)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { onOpen(uri) }) { Text("보기") }
-                OutlinedButton(onClick = { onShare(uri) }) { Text("공유") }
-            }
-        }
-        if (project.cuts.isNotEmpty() && progress == null) {
-            OutlinedButton(onClick = { confirmRestart = true }, modifier = Modifier.fillMaxWidth()) { Text("새로 시작") }
-        }
-        Text("버전 ${BuildConfig.VERSION_NAME}", color = Quiet, fontSize = 12.sp)
     }
 
+    progress?.let { p ->
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("영상 만드는 중 $p%") },
+            text = { LinearProgressIndicator(progress = { p / 100f }, modifier = Modifier.fillMaxWidth()) },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { renderer.cancel(); progress = null }) { Text("그만두기") } },
+        )
+    }
+    result?.let { uri ->
+        AlertDialog(
+            onDismissRequest = { result = null },
+            title = { Text("갤러리에 저장했어요") },
+            text = { Text("Movies/BanbanCut 폴더에 있어요.") },
+            confirmButton = {
+                Row {
+                    TextButton(onClick = { onOpen(uri) }) { Text("보기") }
+                    TextButton(onClick = { onShare(uri) }) { Text("공유") }
+                    TextButton(onClick = { result = null; confirmRestart = true }) { Text("새로 시작") }
+                }
+            },
+            dismissButton = { TextButton(onClick = { result = null }) { Text("닫기") } },
+        )
+    }
+    error?.let { e ->
+        AlertDialog(
+            onDismissRequest = { error = null },
+            text = { Text(e) },
+            confirmButton = { TextButton(onClick = { error = null }) { Text("확인") } },
+        )
+    }
     if (confirmRestart) {
         AlertDialog(
             onDismissRequest = { confirmRestart = false },
             title = { Text("새로 시작할까요?") },
-            text = { Text("지금 컷 목록을 비워요. 갤러리에 저장된 영상과 원본 촬영본은 그대로 있어요.") },
+            text = { Text("컷과 아래 영상 목록을 비워요. 갤러리에 있는 영상은 그대로예요.") },
             confirmButton = {
                 TextButton(onClick = {
                     confirmRestart = false
-                    result = null
-                    error = null
-                    onRestart()
+                    onSelect(null)
+                    onChange(project.copy(cuts = emptyList(), pool = emptyList()))
                 }) { Text("비우기") }
             },
             dismissButton = { TextButton(onClick = { confirmRestart = false }) { Text("취소") } },
@@ -212,81 +345,138 @@ fun ProjectScreen(
     }
 }
 
-/** Always says where the app stands; an update downloads and installs from right here, like a store. */
+/** Hook line with a list of saved ones: save the current line with the star, reuse from the list. */
 @Composable
-private fun UpdateBar(state: UpdateState, onCheck: () -> Unit, onInstall: (Update) -> Unit) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    when (state) {
-                        UpdateState.Checking -> "새 버전 확인 중…"
-                        UpdateState.Latest -> "최신 버전이에요 (${BuildConfig.VERSION_NAME})"
-                        UpdateState.Failed -> "새 버전을 확인하지 못했어요"
-                        is UpdateState.Available -> "새 버전 0.1.${state.update.versionCode}이 있어요"
-                        is UpdateState.Downloading -> "업데이트 받는 중 ${state.percent}%"
-                        is UpdateState.Installing -> "설치 화면을 띄우는 중…"
-                    },
-                    Modifier.weight(1f),
-                    fontSize = 14.sp,
-                )
-                when (state) {
-                    is UpdateState.Available -> Button(onClick = { onInstall(state.update) }) { Text("업데이트") }
-                    UpdateState.Latest, UpdateState.Failed -> TextButton(onClick = onCheck) { Text("다시 확인") }
-                    else -> {}
+private fun HookField(hook: String, hooks: List<String>, maxLines: Int, onHook: (String) -> Unit, onHooks: (List<String>) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    val saved = hook.isNotBlank() && hook in hooks
+    OutlinedTextField(
+        value = hook,
+        onValueChange = onHook,
+        label = { Text("훅 문구 (영어)") },
+        modifier = Modifier.fillMaxWidth(),
+        maxLines = maxLines,
+        trailingIcon = {
+            Row {
+                IconButton(onClick = { if (!saved && hook.isNotBlank()) onHooks(listOf(hook) + hooks) }) {
+                    Icon(Icons.Filled.Star, if (saved) "저장됨" else "훅 저장", tint = if (saved) Accent else Quiet)
+                }
+                Box {
+                    IconButton(onClick = { open = true }) { Icon(Icons.AutoMirrored.Filled.List, "저장한 훅") }
+                    DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                        if (hooks.isEmpty()) DropdownMenuItem(text = { Text("저장한 훅이 없어요") }, onClick = { open = false })
+                        hooks.forEach { h ->
+                            DropdownMenuItem(
+                                text = { Text(h, maxLines = 2) },
+                                onClick = { open = false; onHook(h) },
+                                trailingIcon = {
+                                    IconButton(onClick = { onHooks(hooks - h) }) { Icon(Icons.Filled.Close, "지우기") }
+                                },
+                            )
+                        }
+                    }
                 }
             }
-            if (state is UpdateState.Downloading) {
-                LinearProgressIndicator(progress = { state.percent / 100f }, modifier = Modifier.fillMaxWidth())
+        },
+    )
+}
+
+/** Start point for the selected cell, and moving or removing its cut. */
+@Composable
+private fun CellPanel(template: Template, project: Project, cell: Cell, cutMs: Long, onChange: (Project) -> Unit, onSelect: (Cell?) -> Unit) {
+    val cut = project.cuts[cell.cut]
+    val uri = if (cell.top) cut.topUri else cut.appUri
+    val start = if (cell.top) cut.topStartMs else cut.appStartMs
+    val info = rememberInfo(uri)
+    fun set(c: Cut) = onChange(project.copy(cuts = project.cuts.toMutableList().also { it[cell.cut] = c }))
+
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "컷 ${cell.cut + 1} · ${if (cell.top) "위 칸 (직접 찍은 영상)" else "아래 칸 (앱 녹화, 윗부분만 보여요)"}",
+                fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = { onSelect(null) }) { Text("닫기") }
+        }
+        if (uri == null) {
+            Text("맨 아래 영상 줄에서 넣을 영상을 눌러 주세요.", color = Quiet, fontSize = 13.sp)
+        } else if (info != null) {
+            val maxStart = (info.durationMs - cutMs).coerceAtLeast(0)
+            if (info.durationMs < cutMs) {
+                Text("영상이 ${template.cutSeconds}초보다 짧아요. 더 긴 영상을 넣어 주세요.", color = Danger, fontSize = 13.sp)
+            } else {
+                var value by remember(cut.id, cell.top, start) { mutableFloatStateOf(start.toFloat()) }
+                Text("${sec(value.toLong())}부터 ${template.cutSeconds}초 사용", color = Quiet, fontSize = 13.sp)
+                Slider(
+                    value = value,
+                    onValueChange = { value = it },
+                    onValueChangeFinished = {
+                        set(if (cell.top) cut.copy(topStartMs = value.toLong()) else cut.copy(appStartMs = value.toLong()))
+                    },
+                    valueRange = 0f..maxStart.toFloat().coerceAtLeast(1f),
+                )
             }
         }
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            OutlinedButton(onClick = {
+                onChange(project.copy(cuts = project.cuts.swap(cell.cut, cell.cut - 1)))
+                onSelect(cell.copy(cut = cell.cut - 1))
+            }, enabled = cell.cut > 0) { Text("◀") }
+            OutlinedButton(onClick = {
+                onChange(project.copy(cuts = project.cuts.swap(cell.cut, cell.cut + 1)))
+                onSelect(cell.copy(cut = cell.cut + 1))
+            }, enabled = cell.cut < project.cuts.lastIndex) { Text("▶") }
+            if (uri != null) TextButton(onClick = {
+                set(if (cell.top) cut.copy(topUri = null, topStartMs = 0) else cut.copy(appUri = null, appStartMs = 0))
+            }) { Text("칸 비우기") }
+            TextButton(onClick = {
+                onSelect(null)
+                onChange(project.copy(cuts = project.cuts.filterIndexed { j, _ -> j != cell.cut }))
+            }) { Text("컷 삭제", color = Danger) }
+        }
     }
+}
+
+@Composable
+private fun UpdateChip(state: UpdateState, onCheck: () -> Unit, onInstall: (Update) -> Unit) {
+    when (state) {
+        is UpdateState.Available -> Button(onClick = { onInstall(state.update) }) { Text("업데이트") }
+        is UpdateState.Downloading -> Text("업데이트 받는 중 ${state.percent}%", fontSize = 12.sp, color = Accent)
+        is UpdateState.Installing -> Text("설치 중…", fontSize = 12.sp, color = Accent)
+        UpdateState.Failed -> TextButton(onClick = onCheck) { Text("업데이트 확인 실패 · 다시", fontSize = 12.sp) }
+        UpdateState.Checking, UpdateState.Latest -> {}
+    }
+}
+
+@Composable
+private fun CellBox(uri: Uri?, atMs: Long, selected: Boolean, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(6.dp)
+    Box(
+        Modifier.width(56.dp).aspectRatio(9f / 8f).clip(shape).clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (uri != null) Thumb(uri, atMs, Modifier.fillMaxSize())
+        else Box(Modifier.fillMaxSize().background(Quiet.copy(alpha = 0.15f)), contentAlignment = Alignment.Center) {
+            Icon(Icons.Filled.Add, null, tint = Quiet)
+        }
+        if (selected) Box(Modifier.fillMaxSize().border(3.dp, Accent, shape))
+    }
+}
+
+@Composable
+private fun Tag(text: String, modifier: Modifier) {
+    Text(
+        text, color = Color.White, fontSize = 9.sp,
+        modifier = modifier.padding(2.dp).background(Color.Black.copy(alpha = 0.6f), CircleShape).padding(horizontal = 4.dp),
+    )
 }
 
 private fun <T> List<T>.swap(a: Int, b: Int): List<T> = toMutableList().also { val x = it[a]; it[a] = it[b]; it[b] = x }
 
 @Composable
-private fun CutRow(
-    number: Int,
-    cut: Cut,
-    onClick: () -> Unit,
-    onUp: (() -> Unit)?,
-    onDown: (() -> Unit)?,
-    onDelete: () -> Unit,
-) {
-    Card(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
-        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Thumb(cut.topUri, cut.topStartMs, Modifier.width(64.dp).aspectRatio(9f / 8f))
-                Thumb(cut.appUri, cut.checkAtMs, Modifier.width(64.dp).aspectRatio(9f / 8f))
-            }
-            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                Text("컷 $number", fontWeight = FontWeight.Bold)
-                Text(cut.caption.ifBlank { "자막 없음" }, color = Quiet)
-                Text(
-                    when {
-                        cut.ready -> "준비됨"
-                        cut.topUri == null && cut.appUri == null -> "영상 두 개를 골라주세요"
-                        cut.topUri == null -> "위 영상이 필요해요"
-                        else -> "앱 녹화가 필요해요"
-                    },
-                    color = if (cut.ready) Accent else Quiet,
-                    fontSize = 13.sp,
-                )
-            }
-            Column {
-                TextButton(onClick = { onUp?.invoke() }, enabled = onUp != null) { Text("위로") }
-                TextButton(onClick = { onDown?.invoke() }, enabled = onDown != null) { Text("아래로") }
-                TextButton(onClick = onDelete) { Text("삭제") }
-            }
-        }
-    }
-}
-
-@Composable
 private fun Thumb(uri: Uri?, atMs: Long, modifier: Modifier) {
     val bmp = rememberFrame(uri, atMs, 240)
-    Box(modifier.clip(RoundedCornerShape(6.dp)).background(Color(0xFF1B1F27))) {
+    Box(modifier.background(Film)) {
         if (bmp != null) Image(bmp.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
     }
 }
@@ -307,133 +497,6 @@ private fun rememberInfo(uri: Uri?): VideoInfo? {
         value = if (uri == null) null else withContext(Dispatchers.IO) { Media.info(context, uri) }
     }
     return state.value
-}
-
-private fun keep(context: Context, uri: Uri) {
-    runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-}
-
-@Composable
-fun CutEditor(
-    template: Template,
-    number: Int,
-    initial: Cut,
-    onSave: (Cut) -> Unit,
-    onCancel: () -> Unit,
-) {
-    val context = LocalContext.current
-    var cut by remember { mutableStateOf(initial) }
-    val cutMs = (template.cutSeconds * 1000).toLong()
-    val leadMs = (template.leadSeconds * 1000).toLong()
-    val topInfo = rememberInfo(cut.topUri)
-    val appInfo = rememberInfo(cut.appUri)
-
-    BackHandler(onBack = onCancel)
-
-    val pickTop = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (uri != null) {
-            keep(context, uri)
-            val info = Media.info(context, uri)
-            val caption = if (cut.caption.isBlank() && info?.takenAt != null) Media.clock(info.takenAt) else cut.caption
-            cut = cut.copy(topUri = uri, topStartMs = 0, caption = caption)
-        }
-    }
-    val pickApp = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (uri != null) {
-            keep(context, uri)
-            val dur = Media.info(context, uri)?.durationMs ?: 0
-            cut = cut.copy(appUri = uri, checkAtMs = (dur / 2).coerceAtLeast(leadMs))
-        }
-    }
-    val videoOnly = PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
-
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("컷 $number", fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-            TextButton(onClick = onCancel) { Text("취소") }
-            Button(onClick = { onSave(cut) }) { Text("저장") }
-        }
-
-        if (cut.topUri != null || cut.appUri != null) {
-            // Import guesses which clip is the screen recording; this fixes a wrong guess.
-            TextButton(onClick = {
-                cut = cut.copy(topUri = cut.appUri, topStartMs = 0, appUri = cut.topUri, checkAtMs = leadMs)
-            }) { Text("위아래 영상 바꾸기") }
-        }
-
-        // ── Top half: the action ──
-        Text("위: 직접 찍은 영상", fontWeight = FontWeight.Bold)
-        OutlinedButton(onClick = { pickTop.launch(videoOnly) }) { Text(if (cut.topUri == null) "갤러리에서 고르기" else "다른 영상 고르기") }
-        if (cut.topUri != null && topInfo != null) {
-            Thumb(cut.topUri, cut.topStartMs, Modifier.fillMaxWidth().aspectRatio(9f / 8f))
-            val maxStart = (topInfo.durationMs - cutMs).coerceAtLeast(0)
-            if (topInfo.durationMs < cutMs) {
-                Text("영상이 ${template.cutSeconds}초보다 짧아요. 더 긴 영상을 골라주세요.", color = Color(0xFFF04452))
-            } else {
-                Text("${sec(cut.topStartMs)}부터 ${template.cutSeconds}초 사용", color = Quiet)
-                Slider(
-                    value = cut.topStartMs.toFloat(),
-                    onValueChange = { cut = cut.copy(topStartMs = it.toLong()) },
-                    valueRange = 0f..maxStart.toFloat().coerceAtLeast(1f),
-                )
-            }
-        }
-        OutlinedTextField(
-            value = cut.caption,
-            onValueChange = { cut = cut.copy(caption = it) },
-            label = { Text("시각 자막 (예: 7:45am)") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-        )
-
-        HorizontalDivider()
-
-        // ── Bottom half: the check in the app ──
-        Text("아래: 앱에서 체크하는 화면 녹화", fontWeight = FontWeight.Bold)
-        OutlinedButton(onClick = { pickApp.launch(videoOnly) }) { Text(if (cut.appUri == null) "갤러리에서 고르기" else "다른 녹화 고르기") }
-        val appUri = cut.appUri
-        if (appUri != null && appInfo != null) {
-            val window = Media.windowFraction(appInfo, template)
-            val after = cutMs - leadMs
-            if (appInfo.durationMs < cutMs) {
-                Text("녹화가 ${template.cutSeconds}초보다 짧아요.", color = Color(0xFFF04452))
-            } else {
-                Text("체크한 순간: ${sec(cut.checkAtMs)} (앞 ${template.leadSeconds}초부터 씀)", color = Quiet)
-                Slider(
-                    value = cut.checkAtMs.toFloat(),
-                    onValueChange = { cut = cut.copy(checkAtMs = it.toLong()) },
-                    valueRange = leadMs.toFloat()..(appInfo.durationMs - after).toFloat().coerceAtLeast(leadMs + 1f),
-                )
-            }
-            Text("녹화의 윗부분이 영상 아래 절반에 들어가요. 파란 칸 안에 체크하는 장면이 보이는지 확인해 주세요.", color = Quiet, fontSize = 13.sp)
-            WindowPreview(appUri, cut.checkAtMs + after / 2, window, Modifier.fillMaxWidth(0.6f).align(Alignment.CenterHorizontally))
-        }
-        Spacer(Modifier.height(24.dp))
-    }
-}
-
-/** The whole recording frame with the top part that lands in the bottom half outlined. */
-@Composable
-private fun WindowPreview(uri: Uri, atMs: Long, window: Float, modifier: Modifier) {
-    val center = window / 2
-    val color = Accent
-    val bmp = rememberFrame(uri, atMs, 360)
-    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        val ratio = if (bmp != null) bmp.width.toFloat() / bmp.height else 9f / 19.5f
-        Box(Modifier.fillMaxWidth().aspectRatio(ratio).clip(RoundedCornerShape(6.dp)).background(Color(0xFFE5E8EB))) {
-            if (bmp != null) Image(bmp.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.FillBounds)
-            Canvas(Modifier.fillMaxSize()) {
-                val top = (center - window / 2) * size.height
-                val h = window * size.height
-                drawRect(Color.Black.copy(alpha = 0.45f), Offset.Zero, Size(size.width, top))
-                drawRect(Color.Black.copy(alpha = 0.45f), Offset(0f, top + h), Size(size.width, size.height - top - h))
-                drawRect(color, Offset(0f, top), Size(size.width, h), style = Stroke(width = 3.dp.toPx()))
-            }
-        }
-    }
 }
 
 private fun sec(ms: Long) = "%.1f초".format(Locale.US, ms / 1000f)
