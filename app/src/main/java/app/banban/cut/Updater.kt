@@ -17,15 +17,43 @@ data class Update(val versionCode: Int, val apkUrl: String, val notes: String)
 sealed interface UpdateState {
     data object Checking : UpdateState
     data object Latest : UpdateState
+    /** Couldn't reach GitHub to ask. */
     data object Failed : UpdateState
+    /** Got as far as installing, and Android said no; [reason] says why. */
+    data class InstallFailed(val reason: String) : UpdateState
     data class Available(val update: Update) : UpdateState
     data class Downloading(val update: Update, val percent: Int) : UpdateState
     data class Installing(val update: Update) : UpdateState
 }
 
 object Updater {
-    /** Releases are tagged v<versionCode>. Call off the main thread. */
-    fun check(): UpdateState = runCatching {
+    /**
+     * Releases are tagged v<versionCode>. Asks github.com's own "latest release" page first: the
+     * API allows only 60 questions an hour per network, and phone carriers share one address among
+     * many people, so the API often says no. Call off the main thread.
+     */
+    fun check(): UpdateState = runCatching { fromReleasePage() }
+        .recoverCatching { fromApi() }
+        .getOrDefault(UpdateState.Failed)
+
+    private fun found(code: Int, apkUrl: String) =
+        if (code <= BuildConfig.VERSION_CODE) UpdateState.Latest else UpdateState.Available(Update(code, apkUrl, ""))
+
+    /** github.com/<repo>/releases/latest answers with a jump to …/tag/v<code>. */
+    private fun fromReleasePage(): UpdateState {
+        val conn = URL("https://github.com/${BuildConfig.REPO}/releases/latest").openConnection() as HttpURLConnection
+        conn.instanceFollowRedirects = false
+        conn.connectTimeout = 8000
+        conn.readTimeout = 8000
+        conn.useCaches = false
+        val tag = try { conn.getHeaderField("Location") } finally { conn.disconnect() }
+            ?.substringAfterLast("/tag/", "")?.takeIf { it.startsWith("v") } ?: error("no tag")
+        val code = tag.removePrefix("v").toInt()
+        // CI names the APK after its build number.
+        return found(code, "https://github.com/${BuildConfig.REPO}/releases/download/$tag/banban-cut-$tag.apk")
+    }
+
+    private fun fromApi(): UpdateState {
         val conn = URL("https://api.github.com/repos/${BuildConfig.REPO}/releases/latest").openConnection() as HttpURLConnection
         conn.connectTimeout = 8000
         conn.readTimeout = 8000
@@ -33,12 +61,22 @@ object Updater {
         conn.setRequestProperty("Accept", "application/vnd.github+json")
         val o = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
         val code = o.getString("tag_name").removePrefix("v").toInt()
-        if (code <= BuildConfig.VERSION_CODE) return UpdateState.Latest
         val assets = o.getJSONArray("assets")
         val apk = (0 until assets.length()).map { assets.getJSONObject(it) }
             .first { it.getString("name").endsWith(".apk") }
-        UpdateState.Available(Update(code, apk.getString("browser_download_url"), o.optString("body")))
-    }.getOrDefault(UpdateState.Failed)
+        return found(code, apk.getString("browser_download_url"))
+    }
+
+    /** Android's answer to an install, in words someone can act on. */
+    fun reason(status: Int, message: String?): String = when (status) {
+        PackageInstaller.STATUS_FAILURE_ABORTED -> "설치를 취소했어요. 다시 누르면 이어서 받아요."
+        PackageInstaller.STATUS_FAILURE_BLOCKED ->
+            "폰 보안 설정이 설치를 막았어요. 설정 > 보안 및 개인정보 보호 > 자동 차단에서 끄고 다시 해 주세요."
+        PackageInstaller.STATUS_FAILURE_STORAGE -> "저장 공간이 부족해요. 공간을 비우고 다시 해 주세요."
+        PackageInstaller.STATUS_FAILURE_CONFLICT, PackageInstaller.STATUS_FAILURE_INCOMPATIBLE ->
+            "지금 앱과 새 버전의 서명이 달라서 설치할 수 없어요."
+        else -> "설치하지 못했어요." + (message?.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: "")
+    }
 
     const val ACTION_INSTALL_STATUS = "app.banban.cut.INSTALL_STATUS"
 

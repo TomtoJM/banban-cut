@@ -75,7 +75,7 @@ class MainActivity : ComponentActivity() {
                                     val ok = withContext(Dispatchers.IO) {
                                         Updater.downloadAndInstall(ctx, u) { p -> scope.launch { if (update is UpdateState.Downloading) update = UpdateState.Downloading(u, p) } }
                                     }
-                                    update = if (ok) UpdateState.Installing(u) else UpdateState.Failed
+                                    update = if (ok) UpdateState.Installing(u) else UpdateState.InstallFailed("새 버전을 내려받지 못했어요. 인터넷 연결을 확인하고 다시 해 주세요.")
                                 } },
                             )
                         }
@@ -89,11 +89,11 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         if (intent.action != Updater.ACTION_INSTALL_STATUS) return
-        when (intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)) {
+        when (val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)) {
             PackageInstaller.STATUS_PENDING_USER_ACTION ->
                 IntentCompat.getParcelableExtra(intent, Intent.EXTRA_INTENT, Intent::class.java)?.let(::startActivity)
             PackageInstaller.STATUS_SUCCESS -> {}
-            else -> update = UpdateState.Failed
+            else -> update = UpdateState.InstallFailed(Updater.reason(status, intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)))
         }
     }
 

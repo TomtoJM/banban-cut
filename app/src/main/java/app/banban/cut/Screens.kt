@@ -146,6 +146,9 @@ fun HomeScreen(
             Spacer(Modifier.weight(1f))
             UpdateChip(update, onCheckUpdate, onInstall)
         }
+        if (update is UpdateState.InstallFailed) {
+            Text(update.reason, fontSize = 13.sp, color = Tds.Red700, modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp))
+        }
         Column(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Spacer(Modifier.height(16.dp))
             Text(
@@ -1007,6 +1010,7 @@ private fun UpdateChip(state: UpdateState, onCheck: () -> Unit, onInstall: (Upda
         is UpdateState.Downloading -> Text("업데이트 받는 중 ${state.percent}%", fontSize = 13.sp, color = Tds.Blue700)
         is UpdateState.Installing -> Text("설치 준비 중…", fontSize = 13.sp, color = Tds.Blue700)
         UpdateState.Failed -> TextButton(onClick = onCheck) { Text("업데이트 확인 실패 · 다시", fontSize = 13.sp, color = Tds.Grey700) }
+        is UpdateState.InstallFailed -> TextButton(onClick = onCheck) { Text("설치 실패 · 다시", fontSize = 13.sp, color = Tds.Red700) }
         UpdateState.Checking, UpdateState.Latest -> Text(BuildConfig.VERSION_NAME, fontSize = 12.sp, color = Tds.Grey500)
     }
 }
