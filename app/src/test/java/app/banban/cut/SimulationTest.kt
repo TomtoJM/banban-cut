@@ -124,6 +124,12 @@ class SimulationTest {
             if (r == 1) { tapPhoto(picks[1]); tapPhoto(picks[1]) }
             // 2. Words on every photo: pick the first photo, then type and go on with 다음 사진.
             val photos = deck.slides.sumOf { sl -> sl.frames.count { it.uri != null } }
+            // Back to the first slide: swipe (here, tap the slide peeking in on the left) once per slide.
+            for (n in deck.slides.size - 1 downTo 1) {
+                taps++
+                compose.onNode(hasContentDescription("슬라이드 $n")).performTouchInput { click(Offset(width * 0.97f, height * 0.5f)) }
+                compose.waitForIdle()
+            }
             tapSpot(1, 0)
             if (tapText("문구")) repeat(photos) { k ->
                 type(lines[r][k.coerceAtMost(4)])
