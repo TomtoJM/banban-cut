@@ -448,7 +448,8 @@ fun EditorScreen(
                     PanelTitle(
                         if (slide.layout == Layout.Single) "꽉 찬 사진" else if (p == 0) "위 사진" else "아래 사진",
                         "점선 안이 인스타에서 가려지지 않는 곳이에요",
-                    ) { part = null }
+                        onDone = { part = null },
+                    )
                     ToolRow {
                         ToolButton("문구", Glyph.Text) { tool = Tool.Text }
                         ToolButton("어둡게", Glyph.Dim) { tool = Tool.Dim }
