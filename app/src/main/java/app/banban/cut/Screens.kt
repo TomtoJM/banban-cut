@@ -52,6 +52,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.items
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -551,14 +552,14 @@ private fun GalleryGrid(deck: Deck, sample: List<Uri>?, onPick: (Uri) -> Unit, m
             verticalArrangement = Arrangement.spacedBy(2.dp),
             modifier = Modifier.weight(1f),
         ) {
-            items(photos, key = { it.toString() }) { uri ->
+            itemsIndexed(photos, key = { _, it -> it.toString() }) { i, uri ->
                 val used = deck.uses(uri) > 0
                 val thumb by produceState(Gallery.peek(uri), uri) {
                     if (value == null) value = withContext(Dispatchers.IO) { Gallery.thumb(context, uri) }
                 }
                 Box(
                     Modifier.aspectRatio(1f).background(Tds.Grey100).clickable { onPick(uri) }
-                        .semantics { contentDescription = if (used) "넣은 사진, 누르면 빠져요" else "사진" },
+                        .semantics { contentDescription = "갤러리 ${i + 1}번째 사진" + if (used) ", 넣음, 누르면 빠져요" else "" },
                 ) {
                     Canvas(Modifier.fillMaxSize()) {
                         val bmp = thumb ?: return@Canvas
