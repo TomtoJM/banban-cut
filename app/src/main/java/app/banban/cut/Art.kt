@@ -11,7 +11,7 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import android.net.Uri
 import android.provider.MediaStore
-import android.text.Layout
+import android.text.Layout as TextLayout
 import android.text.StaticLayout
 import android.text.TextPaint
 import android.util.LruCache
@@ -94,7 +94,7 @@ object Art {
         }
         val maxW = (r.width() * 0.84f).toInt()
         val layout = StaticLayout.Builder.obtain(f.text, 0, f.text.length, paint, maxW)
-            .setAlignment(Layout.Alignment.ALIGN_CENTER)
+            .setAlignment(TextLayout.Alignment.ALIGN_CENTER)
             .setLineSpacing(0f, 1.1f)
             .build()
         canvas.save()
