@@ -367,7 +367,7 @@ fun EditorScreen(
                                 )
                                 if (mine && tool == Tool.None) s.frames.forEachIndexed { p, f ->
                                     if (f.uri != null) RemoveButton(
-                                        Modifier.offset(x = slideW - 44.dp, y = if (p == 0) 0.dp else slideH / 2),
+                                        Modifier.offset(y = if (p == 0) 0.dp else slideH / 2),
                                     ) {
                                         if (part == p) part = null
                                         set(i, current.slides[i].with(p, f.copy(uri = null, zoom = 1f, x = 0f, y = 0f)))
