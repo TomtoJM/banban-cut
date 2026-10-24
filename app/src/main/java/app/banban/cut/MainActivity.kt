@@ -27,108 +27,61 @@ import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     private var update by mutableStateOf<UpdateState>(UpdateState.Checking)
-    private var player: PreviewPlayer? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val ctx = applicationContext
-        val preview = PreviewPlayer(this).also { player = it }
         setContent {
             BanbanTheme {
                 Surface(Modifier.fillMaxSize()) {
                     Box(Modifier.safeDrawingPadding()) {
-                        var template by remember { mutableStateOf(Template.load(ctx)) }
-                        var project by remember { mutableStateOf(Project.load(ctx, template.hookText)) }
-                        var hooks by remember { mutableStateOf(Hooks.load(ctx, template.hookText)) }
-                        var selected by remember { mutableStateOf<Cell?>(null) }
-                        var play by remember { mutableStateOf(PlayState()) }
+                        var deck by remember { mutableStateOf(Deck.load(ctx)) }
+                        var editing by remember { mutableStateOf(false) }
                         var checks by remember { mutableIntStateOf(0) }
                         val scope = rememberCoroutineScope()
-                        val renderer = remember(template) { Renderer(ctx, template) }
-                        val cutMs = (template.cutSeconds * 1000).toLong()
 
-                        LaunchedEffect(Unit) {
-                            withContext(Dispatchers.IO) {
-                                Updater.cleanUp(ctx)
-                                Template.refresh(ctx)?.let { template = it }
-                            }
-                        }
+                        LaunchedEffect(Unit) { withContext(Dispatchers.IO) { Updater.cleanUp(ctx) } }
                         LaunchedEffect(checks) {
                             update = UpdateState.Checking
                             update = withContext(Dispatchers.IO) { Updater.check() }
                         }
-                        LaunchedEffect(preview) {
-                            preview.onError = { play = play.copy(error = it) }
-                            while (true) {
-                                play = play.copy(playing = preview.playing, positionMs = preview.positionMs)
-                                delay(100)
-                            }
-                        }
-                        // Rebuild the preview shortly after an edit settles, and keep playing from the same spot.
-                        LaunchedEffect(project.cuts, project.hook, project.outro, template) {
-                            delay(400)
-                            val composition = withContext(Dispatchers.IO) { renderer.build(project) }
-                            if (composition != null) {
-                                play = play.copy(error = null)
-                                preview.show(composition, preview.positionMs.coerceAtMost(renderer.lengthMs(project) - 1))
-                                preview.play()
-                            } else {
-                                preview.pause()
-                            }
+                        // Dragging a photo changes the deck many times a second; write it down once it settles.
+                        LaunchedEffect(deck) {
+                            delay(500)
+                            Deck.save(ctx, deck)
                         }
 
-                        fun change(p: Project) {
-                            project = p
-                            Project.save(ctx, p)
+                        if (editing) {
+                            EditorScreen(
+                                deck = deck,
+                                onChange = { deck = it },
+                                onClose = { editing = false },
+                                onShare = ::share,
+                            )
+                        } else {
+                            HomeScreen(
+                                deck = deck,
+                                update = update,
+                                onPicked = { uris ->
+                                    deck = Deck(Deck.fromPhotos(uris).take(Deck.MAX_SLIDES))
+                                    editing = true
+                                },
+                                onContinue = { editing = true },
+                                onCheckUpdate = { checks++ },
+                                onInstall = { u -> scope.launch {
+                                    update = UpdateState.Downloading(u, 0)
+                                    val ok = withContext(Dispatchers.IO) {
+                                        Updater.downloadAndInstall(ctx, u) { p -> scope.launch { if (update is UpdateState.Downloading) update = UpdateState.Downloading(u, p) } }
+                                    }
+                                    update = if (ok) UpdateState.Installing(u) else UpdateState.Failed
+                                } },
+                            )
                         }
-
-                        EditorScreen(
-                            template = template,
-                            project = project,
-                            hooks = hooks,
-                            update = update,
-                            play = play,
-                            lengthMs = renderer.lengthMs(project),
-                            preview = { m -> PreviewSurface(preview, m) },
-                            selected = selected,
-                            onSelect = { cell ->
-                                selected = cell
-                                // Jump the preview to the cut being edited.
-                                if (cell != null && project.cuts.getOrNull(cell.cut)?.ready == true) {
-                                    preview.seekTo(project.cuts.take(cell.cut).count { it.ready } * cutMs)
-                                }
-                            },
-                            onChange = ::change,
-                            onHooks = { hooks = it; Hooks.save(ctx, it) },
-                            onPlayPause = { if (preview.playing) preview.pause() else preview.play() },
-                            onSeek = preview::seekTo,
-                            onCheckUpdate = { checks++ },
-                            onInstall = { u -> scope.launch {
-                                update = UpdateState.Downloading(u, 0)
-                                val ok = withContext(Dispatchers.IO) {
-                                    Updater.downloadAndInstall(ctx, u) { p -> scope.launch { if (update is UpdateState.Downloading) update = UpdateState.Downloading(u, p) } }
-                                }
-                                update = if (ok) UpdateState.Installing(u) else UpdateState.Failed
-                            } },
-                            onExportStarted = preview::pause,
-                            onOpen = ::open,
-                            onShare = ::share,
-                        )
                     }
                 }
             }
         }
-    }
-
-    override fun onStop() {
-        super.onStop()
-        player?.pause()
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        player?.release()
     }
 
     /** The installer's answer: show its confirm screen, or note that the update didn't go through. */
@@ -143,13 +96,18 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun open(uri: Uri) {
-        startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, "video/mp4").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+    /** Sends every saved slide at once; Instagram turns a multi-photo share into a carousel post. */
+    private fun share(uris: List<Uri>, instagram: Boolean) {
+        val send = Intent(Intent.ACTION_SEND_MULTIPLE).setType("image/jpeg")
+            .putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        val app = send.clone() as Intent
+        app.setPackage(INSTAGRAM)
+        if (instagram && app.resolveActivity(packageManager) != null) startActivity(app)
+        else startActivity(Intent.createChooser(send, null))
     }
 
-    private fun share(uri: Uri) {
-        val send = Intent(Intent.ACTION_SEND).setType("video/mp4").putExtra(Intent.EXTRA_STREAM, uri)
-            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        startActivity(Intent.createChooser(send, null))
+    private companion object {
+        const val INSTAGRAM = "com.instagram.android"
     }
 }
