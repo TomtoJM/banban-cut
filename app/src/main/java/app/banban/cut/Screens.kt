@@ -44,6 +44,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -718,7 +719,8 @@ private fun TextPanel(
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { if (frame.text.isEmpty() && phrases.isEmpty()) runCatching { focus.requestFocus() } }
     val text = frame.text.trim()
-    val typing = WindowInsets.isImeVisible
+    var focused by remember { mutableStateOf(false) }
+    val typing = focused && WindowInsets.isImeVisible
     PanelTitle("문구", "글씨를 끌어서 옮기고, 두 손가락으로 크기를 바꿔요", onDone)
     Column(Modifier.padding(horizontal = 16.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -726,7 +728,7 @@ private fun TextPanel(
                 value = frame.text,
                 onValueChange = { onFrame(frame.copy(text = it)) },
                 placeholder = { Text("예: Give charity.") },
-                modifier = Modifier.weight(1f).focusRequester(focus),
+                modifier = Modifier.weight(1f).focusRequester(focus).onFocusChanged { focused = it.isFocused },
                 maxLines = 2,
             )
             Spacer(Modifier.width(8.dp))
