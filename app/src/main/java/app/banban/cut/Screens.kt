@@ -890,7 +890,7 @@ private fun TextPanel(
     val text = frame.text.trim()
     var focused by remember { mutableStateOf(false) }
     val typing = focused && WindowInsets.isImeVisible
-    PanelTitle("문구", "글씨를 끌어서 옮기고, 두 손가락으로 크기를 바꿔요", onDone, onNext)
+    PanelTitle("문구", if (onNext != null) "끌어서 옮기고, 두 손가락으로 크기 조절" else "글씨를 끌어서 옮기고, 두 손가락으로 크기를 바꿔요", onDone, onNext)
     Column(Modifier.padding(horizontal = 16.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
