@@ -235,8 +235,8 @@ fun EditorScreen(
     }
 
     /**
-     * A gallery tap: out if it's already in. Otherwise into this slide's chosen or first empty
-     * spot, then the next empty spot, then a new slide, so tapping photos in a row fills the post.
+     * A gallery tap: out if it's already in. Otherwise into the chosen empty spot, else the first
+     * empty spot in the post, else a new slide, so tapping photos in a row fills the post in order.
      */
     fun pick(uri: Uri) {
         val d = current
@@ -248,10 +248,12 @@ fun EditorScreen(
         fun put(i: Int, p: Int) = set(i, current.slides[i].with(p, current.slides[i].frame(p).copy(uri = uri, zoom = 1f, x = 0f, y = 0f)))
         val pg = pager.currentPage
         val s = d.slides.getOrNull(pg)
-        val here = s?.let { part?.takeIf { p -> s.frame(p).uri == null } ?: s.frames.indexOfFirst { it.uri == null }.takeIf { it >= 0 } }
+        // A chosen empty spot wins; otherwise the earliest gap, so a photo taken out by mistake goes back where it was.
+        val chosen = part?.takeIf { s?.frame(it)?.uri == null }
+        val gap = d.firstEmpty()
         when {
-            here != null -> put(pg, here)
-            d.firstEmpty(pg) != null -> d.firstEmpty(pg)!!.let { (i, p) -> put(i, p); goTo(i) }
+            s != null && chosen != null -> put(pg, chosen)
+            gap != null -> gap.let { (i, p) -> put(i, p); if (i != pg) goTo(i) }
             d.slides.size < Deck.MAX_SLIDES -> addSlide(uri)
             else -> say("슬라이드는 ${Deck.MAX_SLIDES}장까지 만들 수 있어요")
         }
