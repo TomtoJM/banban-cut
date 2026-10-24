@@ -147,7 +147,7 @@ fun HomeScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
             Text(
-                "두 장씩 위아래로 들어가고, 마지막 사진은 꽉 차게 들어가요.",
+                "두 장씩 위아래로, 마지막 사진은 꽉 차게 들어가요.",
                 fontSize = 16.sp, color = Tds.Grey600, modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
             )
             Box(Modifier.weight(1f).fillMaxWidth().padding(vertical = 24.dp), contentAlignment = Alignment.Center) {
@@ -517,7 +517,7 @@ fun SlideCanvas(
         @Suppress("UNUSED_EXPRESSION") loaded // redraw when a photo arrives
         drawIntoCanvas { Art.draw(it.nativeCanvas, slide, size.width, size.height, face, Photos::peek) }
         slide.frames.forEachIndexed { p, f ->
-            if (f.uri == null) {
+            if (f.uri == null && f.text.isBlank()) {
                 val r = Art.area(slide, p, size.width, size.height)
                 drawGlyph(Glyph.Photo, Color.White.copy(alpha = 0.7f), Offset(r.centerX(), r.centerY()), minOf(r.width(), r.height()) * 0.18f)
             }
@@ -765,10 +765,12 @@ fun ApplySheet(deck: Deck, from: Pair<Int, Int>, onApply: (List<Pair<Int, Int>>)
                     Box(Modifier.border(if (on) 3.dp else 0.dp, if (on) Tds.Blue500 else Color.Transparent, RoundedCornerShape(6.dp)).padding(3.dp)) {
                         SlideCanvas(s, selectedPart = null, modifier = Modifier.fillMaxWidth(), onTap = { toggle() })
                         // Wash out the other half so it's clear which photo this spot is.
-                        if (s.layout == Layout.Halves) Box(
-                            Modifier.align(if (p == 0) Alignment.BottomCenter else Alignment.TopCenter)
-                                .fillMaxWidth().fillMaxHeight(0.5f).background(Color.White.copy(alpha = 0.7f)),
-                        )
+                        if (s.layout == Layout.Halves) Box(Modifier.matchParentSize()) {
+                            Box(
+                                Modifier.align(if (p == 0) Alignment.BottomCenter else Alignment.TopCenter)
+                                    .fillMaxWidth().fillMaxHeight(0.5f).background(Color.White.copy(alpha = 0.7f)),
+                            )
+                        }
                         Box(
                             Modifier.align(Alignment.TopEnd).padding(6.dp).size(24.dp)
                                 .background(if (on) Tds.Blue500 else Color.Black.copy(alpha = 0.25f), CircleShape)
