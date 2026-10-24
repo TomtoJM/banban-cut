@@ -4,6 +4,8 @@ import android.content.Intent
 import android.content.pm.PackageInstaller
 import android.net.Uri
 import android.os.Bundle
+import android.provider.Settings
+import androidx.lifecycle.lifecycleScope
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -70,19 +72,44 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onContinue = { editing = true },
                                 onCheckUpdate = { checks++ },
-                                onInstall = { u -> scope.launch {
-                                    update = UpdateState.Downloading(u, 0)
-                                    val ok = withContext(Dispatchers.IO) {
-                                        Updater.downloadAndInstall(ctx, u) { p -> scope.launch { if (update is UpdateState.Downloading) update = UpdateState.Downloading(u, p) } }
-                                    }
-                                    update = if (ok) UpdateState.Installing(u) else UpdateState.InstallFailed("새 버전을 내려받지 못했어요. 인터넷 연결을 확인하고 다시 해 주세요.")
-                                } },
+                                onInstall = ::install,
+                                onOpenSecurity = ::openSecurity,
                             )
                         }
                     }
                 }
             }
         }
+    }
+
+    /**
+     * Android lets an app install updates only after the person allows it once. Without that, open
+     * the switch for 반반컷 first and carry on by itself on coming back (see [onResume]).
+     */
+    private fun install(u: Update) {
+        if (!packageManager.canRequestPackageInstalls()) {
+            update = UpdateState.NeedsPermission(u)
+            runCatching { startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName"))) }
+            return
+        }
+        lifecycleScope.launch {
+            update = UpdateState.Downloading(u, 0)
+            val ok = withContext(Dispatchers.IO) {
+                Updater.downloadAndInstall(applicationContext, u) { p -> lifecycleScope.launch { if (update is UpdateState.Downloading) update = UpdateState.Downloading(u, p) } }
+            }
+            update = if (ok) UpdateState.Installing(u) else UpdateState.InstallFailed("새 버전을 내려받지 못했어요. 인터넷 연결을 확인하고 다시 해 주세요.")
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        (update as? UpdateState.NeedsPermission)?.let { if (packageManager.canRequestPackageInstalls()) install(it.update) }
+    }
+
+    /** Samsung's Auto Blocker lives under Security and privacy; this opens that page. */
+    private fun openSecurity() {
+        runCatching { startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS)) }
+            .onFailure { runCatching { startActivity(Intent(Settings.ACTION_SETTINGS)) } }
     }
 
     /** The installer's answer: show its confirm screen, or note that the update didn't go through. */
@@ -93,7 +120,10 @@ class MainActivity : ComponentActivity() {
             PackageInstaller.STATUS_PENDING_USER_ACTION ->
                 IntentCompat.getParcelableExtra(intent, Intent.EXTRA_INTENT, Intent::class.java)?.let(::startActivity)
             PackageInstaller.STATUS_SUCCESS -> {}
-            else -> update = UpdateState.InstallFailed(Updater.reason(status, intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)))
+            else -> update = UpdateState.InstallFailed(
+                Updater.reason(status, intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)),
+                blocked = status == PackageInstaller.STATUS_FAILURE_BLOCKED,
+            )
         }
     }
 

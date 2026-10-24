@@ -136,6 +136,7 @@ fun HomeScreen(
     onContinue: () -> Unit,
     onCheckUpdate: () -> Unit,
     onInstall: (Update) -> Unit,
+    onOpenSecurity: () -> Unit = {},
 ) {
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(Deck.MAX_PHOTOS)) {
         if (it.isNotEmpty()) onPicked(it)
@@ -148,6 +149,15 @@ fun HomeScreen(
         }
         if (update is UpdateState.InstallFailed) {
             Text(update.reason, fontSize = 13.sp, color = Tds.Red700, modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp))
+            if (update.blocked) TextButton(onClick = onOpenSecurity, modifier = Modifier.padding(start = 8.dp)) {
+                Text("보안 설정 열기", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Tds.Blue700)
+            }
+        }
+        if (update is UpdateState.NeedsPermission) {
+            Text(
+                "설정에서 '이 출처 허용'을 켜고 돌아오면 바로 이어서 받아요.",
+                fontSize = 13.sp, color = Tds.Grey700, modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+            )
         }
         Column(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Spacer(Modifier.height(16.dp))
@@ -1010,6 +1020,7 @@ private fun UpdateChip(state: UpdateState, onCheck: () -> Unit, onInstall: (Upda
         is UpdateState.Downloading -> Text("업데이트 받는 중 ${state.percent}%", fontSize = 13.sp, color = Tds.Blue700)
         is UpdateState.Installing -> Text("설치 준비 중…", fontSize = 13.sp, color = Tds.Blue700)
         UpdateState.Failed -> TextButton(onClick = onCheck) { Text("업데이트 확인 실패 · 다시", fontSize = 13.sp, color = Tds.Grey700) }
+        is UpdateState.NeedsPermission -> TextButton(onClick = { onInstall(state.update) }) { Text("설치 허용 필요 · 다시", fontSize = 13.sp, color = Tds.Blue700) }
         is UpdateState.InstallFailed -> TextButton(onClick = onCheck) { Text("설치 실패 · 다시", fontSize = 13.sp, color = Tds.Red700) }
         UpdateState.Checking, UpdateState.Latest -> Text(BuildConfig.VERSION_NAME, fontSize = 12.sp, color = Tds.Grey500)
     }

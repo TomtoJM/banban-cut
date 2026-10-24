@@ -4,7 +4,6 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageInstaller
-import android.os.Build
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
@@ -20,7 +19,9 @@ sealed interface UpdateState {
     /** Couldn't reach GitHub to ask. */
     data object Failed : UpdateState
     /** Got as far as installing, and Android said no; [reason] says why. */
-    data class InstallFailed(val reason: String) : UpdateState
+    data class InstallFailed(val reason: String, val blocked: Boolean = false) : UpdateState
+    /** Waiting for the person to allow 반반컷 to install updates. */
+    data class NeedsPermission(val update: Update) : UpdateState
     data class Available(val update: Update) : UpdateState
     data class Downloading(val update: Update, val percent: Int) : UpdateState
     data class Installing(val update: Update) : UpdateState
@@ -71,7 +72,7 @@ object Updater {
     fun reason(status: Int, message: String?): String = when (status) {
         PackageInstaller.STATUS_FAILURE_ABORTED -> "설치를 취소했어요. 다시 누르면 이어서 받아요."
         PackageInstaller.STATUS_FAILURE_BLOCKED ->
-            "폰 보안 설정이 설치를 막았어요. 설정 > 보안 및 개인정보 보호 > 자동 차단에서 끄고 다시 해 주세요."
+            "폰의 자동 차단이 설치를 막았어요. 아래 버튼으로 보안 설정을 열고 '자동 차단'을 끈 뒤 다시 해 주세요."
         PackageInstaller.STATUS_FAILURE_STORAGE -> "저장 공간이 부족해요. 공간을 비우고 다시 해 주세요."
         PackageInstaller.STATUS_FAILURE_CONFLICT, PackageInstaller.STATUS_FAILURE_INCOMPATIBLE ->
             "지금 앱과 새 버전의 서명이 달라서 설치할 수 없어요."
@@ -82,14 +83,13 @@ object Updater {
 
     /**
      * Streams the APK straight into Android's installer, the way store apps do: no file is saved on
-     * the phone. Android then asks once to confirm (and, after the first time, may update silently).
+     * the phone. Android asks to confirm each time; the person stays in charge of what gets installed.
      * Call off the main thread; false means the download failed.
      */
     fun downloadAndInstall(context: Context, update: Update, onProgress: (Int) -> Unit): Boolean {
         val installer = context.packageManager.packageInstaller
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
             setAppPackageName(context.packageName)
-            if (Build.VERSION.SDK_INT >= 31) setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
         }
         val id = installer.createSession(params)
         return runCatching {
