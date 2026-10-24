@@ -113,6 +113,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -181,6 +184,7 @@ fun EditorScreen(
     var part by remember { mutableStateOf(startPart) }
     var tool by remember { mutableStateOf(if (startText) Tool.Text else Tool.None) }
     var reviewing by remember { mutableStateOf(startSheet) }
+    var tidied by remember { mutableStateOf<String?>(null) }
     var phrases by remember { mutableStateOf(Phrases.load(context)) }
     var exporting by remember { mutableStateOf<Int?>(null) }
     var saved by remember { mutableStateOf<List<Uri>?>(null) }
@@ -230,7 +234,10 @@ fun EditorScreen(
         goTo(current.slides.size)
     }
 
-    /** A gallery tap: out if it's already in, else into this slide's chosen or first empty spot. */
+    /**
+     * A gallery tap: out if it's already in. Otherwise into this slide's chosen or first empty
+     * spot, then the next empty spot, then a new slide, so tapping photos in a row fills the post.
+     */
     fun pick(uri: Uri) {
         val d = current
         if (d.uses(uri) > 0) {
@@ -238,17 +245,30 @@ fun EditorScreen(
             change(d.copy(slides = d.slides.map { it.copy(top = out(it.top), bottom = out(it.bottom)) }))
             return
         }
-        val s = d.slides.getOrNull(page)
-        if (s == null) {
-            if (room) addSlide(uri)
-            return
+        fun put(i: Int, p: Int) = set(i, current.slides[i].with(p, current.slides[i].frame(p).copy(uri = uri, zoom = 1f, x = 0f, y = 0f)))
+        val pg = pager.currentPage
+        val s = d.slides.getOrNull(pg)
+        val here = s?.let { part?.takeIf { p -> s.frame(p).uri == null } ?: s.frames.indexOfFirst { it.uri == null }.takeIf { it >= 0 } }
+        when {
+            here != null -> put(pg, here)
+            d.firstEmpty(pg) != null -> d.firstEmpty(pg)!!.let { (i, p) -> put(i, p); goTo(i) }
+            d.slides.size < Deck.MAX_SLIDES -> addSlide(uri)
+            else -> say("슬라이드는 ${Deck.MAX_SLIDES}장까지 만들 수 있어요")
         }
-        val target = part?.takeIf { s.frame(it).uri == null } ?: s.frames.indexOfFirst { it.uri == null }.takeIf { it >= 0 }
-        if (target == null) {
-            say("빈 칸이 없어요. 사진의 −를 눌러 빼고 넣어 주세요")
-            return
+    }
+
+    /** From one photo's words straight to the next photo's, keyboard and all. */
+    fun nextWords(): (() -> Unit)? {
+        val p = part ?: return null
+        val spots = current.spots().filter { (i, q) -> current.slides[i].frame(q).uri != null }
+        val to = spots.getOrNull(spots.indexOf(page to p) + 1) ?: return null
+        return {
+            scope.launch {
+                if (pager.currentPage != to.first) pager.animateScrollToPage(to.first)
+                part = to.second
+                tool = Tool.Text
+            }
         }
-        set(page, s.with(target, s.frame(target).copy(uri = uri, zoom = 1f, x = 0f, y = 0f)))
     }
 
     /** Moves the selected photo one spot back or forward in the carousel; the words stay put. */
@@ -274,16 +294,32 @@ fun EditorScreen(
         say("슬라이드를 지웠어요", undo = before)
     }
 
-    /** 저장: keeps the carousel for next time and opens the last look before downloading. */
+    /**
+     * 저장: keeps the carousel for next time and opens the last look before downloading. A slide
+     * with one photo becomes a full shot, the way the last photo usually is, and an empty slide is
+     * left out, rather than stopping on an empty spot (Toss: fix what you can, then say so).
+     */
     fun save() {
-        val empty = current.firstEmpty()
-        if (empty != null) {
-            // Toss: don't stop with an error; take them to what's missing.
-            focus(empty.first, empty.second)
-            say("빈 칸이 있어요. 아래에서 사진을 골라 넣어 주세요")
-            return
+        val d = current
+        val tidy = d.slides.mapNotNull { s ->
+            val filled = s.frames.filter { it.uri != null }
+            when {
+                filled.isEmpty() -> null
+                s.layout == Layout.Halves && filled.size == 1 -> s.copy(layout = Layout.Single, top = filled[0])
+                else -> s
+            }
         }
-        onSave(current)
+        if (tidy.isEmpty()) { say("아래에서 사진을 눌러 넣어 주세요"); return }
+        part = null; tool = Tool.None
+        val next = d.copy(slides = tidy)
+        tidied = when {
+            tidy == d.slides -> null
+            tidy.size < d.slides.size && tidy.any { it.layout == Layout.Single && it !in d.slides } -> "빈 슬라이드는 빼고, 사진이 한 장인 슬라이드는 꽉 차게 바꿨어요."
+            tidy.size < d.slides.size -> "빈 슬라이드는 뺐어요."
+            else -> "사진이 한 장인 슬라이드는 꽉 차게 바꿨어요."
+        }
+        if (tidied != null) change(next)
+        onSave(next)
         reviewing = true
     }
 
@@ -398,9 +434,10 @@ fun EditorScreen(
                             onFrame = { setFrame(it) },
                             onKeep = { t -> phrases = (listOf(t) + phrases).distinct(); Phrases.save(context, phrases) },
                             onForget = { t -> phrases = phrases - t; Phrases.save(context, phrases) },
-                            onDone = { tool = Tool.None },
+                            onNext = nextWords(),
+                            onDone = { tool = Tool.None; part = null },
                         )
-                        else -> DimPanel(frame, { setFrame(it) }) { tool = Tool.None }
+                        else -> DimPanel(frame, { setFrame(it) }) { tool = Tool.None; part = null }
                     }
                     return@Column
                 }
@@ -440,8 +477,8 @@ fun EditorScreen(
                 Text(
                     when {
                         slide == null -> "사진을 누르면 새 슬라이드에 들어가요"
-                        slide.frames.any { it.uri == null } -> "사진을 누르면 빈 칸에 들어가요 · 다시 누르면 빠져요"
-                        else -> "넣은 사진을 다시 누르면 빠져요"
+                        slide.frames.any { it.uri == null } -> "사진을 누르는 차례대로 들어가요 · 다시 누르면 빠져요"
+                        else -> "사진을 더 누르면 다음 칸에 들어가요 · 다시 누르면 빠져요"
                     },
                     fontSize = 13.sp, color = Tds.Grey600, modifier = Modifier.padding(start = 20.dp, top = 2.dp, bottom = 6.dp),
                 )
@@ -449,7 +486,7 @@ fun EditorScreen(
             }
         }
 
-        if (reviewing) SaveSheet(deck, onDownload = ::download, onClose = { reviewing = false })
+        if (reviewing) SaveSheet(deck, tidied, onDownload = ::download, onClose = { reviewing = false })
         exporting?.let { n -> ExportingScreen(n, deck.slides.size) }
         saved?.let { uris ->
             DoneScreen(
@@ -732,7 +769,7 @@ private fun Dots(count: Int, page: Int, plusLast: Boolean) {
 
 /** The last look before downloading: every slide as it will be saved, swipe through. */
 @Composable
-fun SaveSheet(deck: Deck, onDownload: () -> Unit, onClose: () -> Unit) {
+fun SaveSheet(deck: Deck, note: String? = null, onDownload: () -> Unit, onClose: () -> Unit) {
     val pager = rememberPagerState { deck.slides.size }
     Column(Modifier.fillMaxSize().background(Tds.White).clickable(remember { MutableInteractionSource() }, null) {}) {
         Row(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -740,7 +777,7 @@ fun SaveSheet(deck: Deck, onDownload: () -> Unit, onClose: () -> Unit) {
         }
         Text("저장했어요", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Tds.Grey900, modifier = Modifier.padding(horizontal = 20.dp))
         Text(
-            "다음에 열면 이어서 고칠 수 있어요. 이대로 갤러리에 내려받을까요?",
+            (note?.let { "$it " } ?: "다음에 열면 이어서 고칠 수 있어요. ") + "이대로 갤러리에 내려받을까요?",
             fontSize = 15.sp, color = Tds.Grey600, modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 8.dp),
         )
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().background(Tds.Grey100).padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
@@ -817,12 +854,13 @@ private fun PostIcon(c: Color, shape: Path.(Float) -> Unit) = Canvas(Modifier.si
 }
 
 @Composable
-private fun PanelTitle(title: String, hint: String, onDone: () -> Unit) {
+private fun PanelTitle(title: String, hint: String, onDone: () -> Unit, onNext: (() -> Unit)? = null) {
     Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(title, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Tds.Grey900)
             Text(hint, fontSize = 13.sp, color = Tds.Grey600)
         }
+        if (onNext != null) TextButton(onClick = onNext) { Text("다음 사진", fontSize = 16.sp, color = Tds.Grey700) }
         TextButton(onClick = onDone) { Text("완료", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Tds.Blue700) }
     }
 }
@@ -841,6 +879,7 @@ private fun TextPanel(
     onFrame: (Frame) -> Unit,
     onKeep: (String) -> Unit,
     onForget: (String) -> Unit,
+    onNext: (() -> Unit)?,
     onDone: () -> Unit,
 ) {
     val focus = remember { FocusRequester() }
@@ -848,7 +887,7 @@ private fun TextPanel(
     val text = frame.text.trim()
     var focused by remember { mutableStateOf(false) }
     val typing = focused && WindowInsets.isImeVisible
-    PanelTitle("문구", "글씨를 끌어서 옮기고, 두 손가락으로 크기를 바꿔요", onDone)
+    PanelTitle("문구", "글씨를 끌어서 옮기고, 두 손가락으로 크기를 바꿔요", onDone, onNext)
     Column(Modifier.padding(horizontal = 16.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
@@ -860,6 +899,9 @@ private fun TextPanel(
                 },
                 modifier = Modifier.weight(1f).focusRequester(focus).onFocusChanged { focused = it.isFocused },
                 maxLines = 2,
+                // The keyboard's own key goes on to the next photo, so a whole post can be typed in one go.
+                keyboardOptions = KeyboardOptions(imeAction = if (onNext != null) ImeAction.Next else ImeAction.Done),
+                keyboardActions = KeyboardActions(onNext = { onNext?.invoke() }, onDone = { onDone() }),
             )
             Spacer(Modifier.width(8.dp))
             WeakButton("보관", { onKeep(text) }, Modifier.height(56.dp), enabled = text.isNotEmpty() && text !in phrases)

@@ -122,17 +122,12 @@ class SimulationTest {
             note("  → 사진 ${filled}장 들어감 (원한 5장)")
             // A slip: tap a photo that's already in, then put it back.
             if (r == 1) { tapPhoto(picks[1]); tapPhoto(picks[1]) }
-            // 2. Words on every photo.
-            var k = 0
-            deck.slides.forEachIndexed { i, s ->
-                if (i > 0) swipeTo(i + 1)
-                s.frames.indices.forEach { p ->
-                    if (deck.slides[i].frame(p).uri == null) return@forEach
-                    tapSpot(i + 1, p)
-                    if (!tapText("문구")) return@forEach
-                    type(lines[r][k++.coerceAtMost(4)])
-                    tapText("완료")
-                }
+            // 2. Words on every photo: pick the first photo, then type and go on with 다음 사진.
+            val photos = deck.slides.sumOf { sl -> sl.frames.count { it.uri != null } }
+            tapSpot(1, 0)
+            if (tapText("문구")) repeat(photos) { k ->
+                type(lines[r][k.coerceAtMost(4)])
+                if (k < photos - 1) tapText("다음 사진") else tapText("완료")
             }
             shot("r${r + 1}-2-words")
             note("  문구 후: ${state()}")
@@ -145,7 +140,7 @@ class SimulationTest {
                 tapText("저장")
             }
             val reviewing = compose.onAllNodes(hasText("갤러리에 내려받기", substring = true)).fetchSemanticsNodes().isNotEmpty()
-            note("  저장 → 미리보기 ${if (reviewing) "열림" else "안 열림"}")
+            note("  저장 → 미리보기 ${if (reviewing) "열림" else "안 열림"} | ${state()}")
             tapText("계속 고치기")
             note("  게시물 ${r + 1}: 총 ${taps}번 누름")
         }
