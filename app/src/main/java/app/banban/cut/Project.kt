@@ -1,6 +1,7 @@
 package app.banban.cut
 
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import org.json.JSONArray
 import org.json.JSONObject
@@ -121,13 +122,22 @@ data class Deck(val slides: List<Slide> = emptyList(), val photos: List<Uri> = e
          * Two photos per slide in the order they were picked, and the last photo full on its own
          * slide. If the pairs don't come out even, the last pair keeps an empty spot to fill from the tray.
          */
-        fun fromPhotos(uris: List<Uri>): List<Slide> {
+        fun fromPhotos(uris: List<Uri>, style: Frame = Frame()): List<Slide> {
             if (uris.isEmpty()) return emptyList()
-            val pairs = uris.dropLast(1).chunked(2).map { Slide(top = Frame(it[0]), bottom = Frame(it.getOrNull(1))) }
-            return pairs + Slide(layout = Layout.Single, top = Frame(uris.last()))
+            fun f(u: Uri?) = style.copy(uri = u, text = "")
+            val pairs = uris.dropLast(1).chunked(2).map { Slide(top = f(it[0]), bottom = f(it.getOrNull(1))) }
+            return pairs + Slide(layout = Layout.Single, top = f(uris.last()))
         }
 
-        fun start(uris: List<Uri>) = Deck(fromPhotos(uris).takeLast(MAX_SLIDES), uris.take(MAX_PHOTOS))
+        fun start(uris: List<Uri>, style: Frame = Frame()) = Deck(fromPhotos(uris, style).takeLast(MAX_SLIDES), uris.take(MAX_PHOTOS))
+
+        /**
+         * Photo picker links stop working once the app closes unless we ask to keep them, and
+         * "continue where I left off" needs them the next day.
+         */
+        fun keepAccess(context: Context, uris: List<Uri>) = uris.forEach {
+            runCatching { context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+        }
 
         fun load(context: Context): Deck {
             val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY, null) ?: return Deck()
@@ -165,5 +175,23 @@ object Phrases {
     fun save(context: Context, list: List<String>) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putString(KEY, JSONArray(list).toString()).apply()
+    }
+}
+
+/**
+ * The look last chosen for words and darkening. Someone posting every day sets the same size and
+ * place each time, so new carousels start with it.
+ */
+object LastStyle {
+    private const val PREFS = "style"
+    private const val KEY = "frame"
+
+    fun load(context: Context): Frame =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY, null)
+            ?.let { runCatching { Frame.fromJson(org.json.JSONObject(it)) }.getOrNull() } ?: Frame()
+
+    fun save(context: Context, f: Frame) {
+        val style = Frame(dim = f.dim, textSize = f.textSize, textX = f.textX, textY = f.textY)
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY, style.toJson().toString()).apply()
     }
 }

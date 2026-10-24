@@ -64,7 +64,8 @@ class MainActivity : ComponentActivity() {
                                 deck = deck,
                                 update = update,
                                 onPicked = { uris ->
-                                    deck = Deck.start(uris)
+                                    Deck.keepAccess(ctx, uris)
+                                    deck = Deck.start(uris, LastStyle.load(ctx))
                                     editing = true
                                 },
                                 onContinue = { editing = true },

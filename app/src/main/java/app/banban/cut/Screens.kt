@@ -16,6 +16,12 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import android.graphics.RectF
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -227,7 +233,12 @@ fun EditorScreen(
     }
 
     fun set(i: Int, s: Slide) = onChange(current.copy(slides = current.slides.toMutableList().also { it[i] = s }))
-    fun setFrame(f: Frame) { val p = part ?: return; set(page, current.slides[page].with(p, f)) }
+    fun setFrame(f: Frame) {
+        val p = part ?: return
+        val old = current.slides[page].frame(p)
+        set(page, current.slides[page].with(p, f))
+        if (f.dim != old.dim || f.textSize != old.textSize || f.textX != old.textX || f.textY != old.textY) LastStyle.save(context, f)
+    }
     fun goTo(i: Int) = scope.launch { pager.animateScrollToPage(i) }
     fun say(message: String, undo: Deck? = null) = scope.launch {
         snackbar.currentSnackbarData?.dismiss()
@@ -258,6 +269,7 @@ fun EditorScreen(
 
     val addPhotos = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(Deck.MAX_PHOTOS)) { uris ->
         if (uris.isNotEmpty()) {
+            Deck.keepAccess(context, uris)
             val all = (current.photos + uris).distinct()
             onChange(current.copy(photos = all.take(Deck.MAX_PHOTOS)))
             tray = Tray.Photos
@@ -309,7 +321,12 @@ fun EditorScreen(
             }
 
             // ── Top half: slides, side by side with the next one peeking in ──
-            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+            Box(
+                Modifier.weight(1f).fillMaxWidth()
+                    // Tapping beside the slide lets go of the photo, as tapping outside does in Photos.
+                    .pointerInput(Unit) { detectTapGestures { part = null; tool = Tool.None } },
+                contentAlignment = Alignment.Center,
+            ) {
                 if (deck.slides.isEmpty()) {
                     Text("슬라이드가 없어요.\n아래 사진을 누르면 새 슬라이드가 생겨요.", color = Tds.Grey600, textAlign = TextAlign.Center)
                 } else {
@@ -333,6 +350,8 @@ fun EditorScreen(
                                     guide = mine && part != null,
                                     moveWords = mine && tool == Tool.Text,
                                     onTap = { p -> if (!mine) goTo(i) else if (tool != Tool.Text || part != p) { part = if (part == p) null else p; tool = Tool.None } },
+                                    onTapWords = { p -> if (!mine) goTo(i) else { part = p; tool = Tool.Text } },
+                                    description = "슬라이드 ${i + 1}",
                                     onMove = { p, f -> set(i, current.slides[i].with(p, f)) },
                                 )
                             }
@@ -364,7 +383,7 @@ fun EditorScreen(
                         Tool.None -> {
                             PanelTitle(
                                 if (slide.layout == Layout.Single) "꽉 찬 사진" else if (p == 0) "위 사진" else "아래 사진",
-                                "끌어서 옮기고, 두 손가락으로 키워요",
+                                "점선 안이 인스타에서 가려지지 않는 곳이에요",
                             ) { part = null }
                             ToolRow {
                                 ToolButton("문구", Glyph.Text) { tool = Tool.Text }
@@ -388,6 +407,7 @@ fun EditorScreen(
                             goTo(at)
                         }
                         if (slide != null) {
+                            ToolButton("문구", Glyph.Text) { part = 0; tool = Tool.Text }
                             ToolButton(if (slide.layout == Layout.Halves) "한 장으로" else "두 장으로", if (slide.layout == Layout.Halves) Glyph.Single else Glyph.Halves) {
                                 set(page, slide.copy(layout = if (slide.layout == Layout.Halves) Layout.Single else Layout.Halves))
                             }
@@ -395,10 +415,10 @@ fun EditorScreen(
                                 onChange(current.copy(slides = current.slides.toMutableList().also { it.add(page + 1, slide.copy(id = java.util.UUID.randomUUID().toString())) }))
                                 goTo(page + 1)
                             }
-                            ToolButton("앞으로", Glyph.Left, enabled = page > 0) {
+                            ToolButton("앞 순서로", Glyph.Left, enabled = page > 0) {
                                 onChange(current.copy(slides = current.slides.swap(page, page - 1))); goTo(page - 1)
                             }
-                            ToolButton("뒤로", Glyph.Right, enabled = page < deck.slides.lastIndex) {
+                            ToolButton("뒤 순서로", Glyph.Right, enabled = page < deck.slides.lastIndex) {
                                 onChange(current.copy(slides = current.slides.swap(page, page + 1))); goTo(page + 1)
                             }
                             ToolButton("삭제", Glyph.Delete) { deleteSlide() }
@@ -469,6 +489,8 @@ fun SlideCanvas(
     guide: Boolean = false,
     moveWords: Boolean = false,
     onTap: (Int) -> Unit = {},
+    onTapWords: ((Int) -> Unit)? = null,
+    description: String? = null,
     onMove: (Int, Frame) -> Unit = { _, _ -> },
 ) {
     val context = LocalContext.current
@@ -477,11 +499,23 @@ fun SlideCanvas(
     val latest by rememberUpdatedState(slide)
     val tap by rememberUpdatedState(onTap)
     val move by rememberUpdatedState(onMove)
+    val tapWords by rememberUpdatedState(onTapWords)
     val partOf = { y: Float, h: Float -> if (latest.layout == Layout.Single || y < h / 2) 0 else 1 }
 
     Canvas(
         modifier.aspectRatio(Deck.WIDTH.toFloat() / Deck.HEIGHT).clip(RoundedCornerShape(4.dp))
-            .pointerInput(Unit) { detectTapGestures { tap(partOf(it.y, size.height.toFloat())) } }
+            .then(if (description != null) Modifier.semantics { contentDescription = description } else Modifier)
+            .pointerInput(Unit) {
+                detectTapGestures { at ->
+                    val w = size.width.toFloat()
+                    val h = size.height.toFloat()
+                    val p = partOf(at.y, h)
+                    // Words are the thing people change most; a tap on them goes straight to editing.
+                    val hit = tapWords != null && Art.words(latest, p, w, h, face)?.second
+                        ?.let { RectF(it).apply { inset(-24.dp.toPx(), -16.dp.toPx()) }.contains(at.x, at.y) } == true
+                    if (hit) tapWords?.invoke(p) else tap(p)
+                }
+            }
             .pointerInput(selectedPart, moveWords) {
                 val p = selectedPart ?: return@pointerInput
                 detectTransformGestures { _, pan, zoom, _ ->
@@ -539,6 +573,10 @@ fun SlideCanvas(
             val r = Art.area(slide, selectedPart, size.width, size.height)
             val inset = 1.5.dp.toPx()
             drawRect(Tds.Blue500, Offset(r.left + inset, r.top + inset), Size(r.width() - inset * 2, r.height() - inset * 2), style = Stroke(3.dp.toPx()))
+            if (moveWords && slide.frame(selectedPart).textX == 0.5f && slide.frame(selectedPart).text.isNotBlank()) {
+                // Shows the words are exactly centred, so nobody has to judge it by eye.
+                drawLine(Tds.Blue300, Offset(r.centerX(), r.top), Offset(r.centerX(), r.bottom), 1.dp.toPx())
+            }
             if (moveWords) Art.words(slide, selectedPart, size.width, size.height, face)?.second?.let { b ->
                 val pad = 6.dp.toPx()
                 drawRoundRect(
@@ -577,11 +615,17 @@ private fun PhotoTray(deck: Deck, onAdd: () -> Unit, onPick: (Uri) -> Unit) {
             Box(
                 Modifier.size(64.dp).clip(RoundedCornerShape(10.dp)).background(Tds.Grey100).clickable(onClick = onAdd),
                 contentAlignment = Alignment.Center,
-            ) { Canvas(Modifier.size(24.dp)) { drawGlyph(Glyph.Add, Tds.Grey700) } }
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Canvas(Modifier.size(20.dp)) { drawGlyph(Glyph.Add, Tds.Grey700) }
+                    Text("추가", fontSize = 11.sp, color = Tds.Grey700)
+                }
+            }
         }
         items(deck.photos, key = { it.toString() }) { uri ->
             val uses = deck.uses(uri)
-            Box(Modifier.size(64.dp).clip(RoundedCornerShape(10.dp)).clickable { onPick(uri) }) {
+            val label = "사진 ${deck.photos.indexOf(uri) + 1}" + if (uses > 0) ", ${uses}곳에 쓰임" else ""
+            Box(Modifier.size(64.dp).clip(RoundedCornerShape(10.dp)).clickable { onPick(uri) }.semantics { contentDescription = label }) {
                 Canvas(Modifier.fillMaxSize().background(Tds.Grey200)) {
                     @Suppress("UNUSED_EXPRESSION") loaded
                     val bmp = Photos.peek(uri) ?: return@Canvas
@@ -604,7 +648,7 @@ private fun PhotoTray(deck: Deck, onAdd: () -> Unit, onPick: (Uri) -> Unit) {
 /** HIG segmented control: grey track, the chosen part raised in white. */
 @Composable
 private fun Segmented(labels: List<String>, chosen: Int, modifier: Modifier = Modifier, onChoose: (Int) -> Unit) {
-    Row(modifier.fillMaxWidth().height(36.dp).clip(RoundedCornerShape(9.dp)).background(Tds.Grey100).padding(2.dp)) {
+    Row(modifier.fillMaxWidth().height(40.dp).clip(RoundedCornerShape(10.dp)).background(Tds.Grey100).padding(2.dp)) {
         labels.forEachIndexed { i, label ->
             Box(
                 Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(7.dp))
@@ -660,6 +704,7 @@ private val Spots = listOf("위" to 0.25f, "가운데" to 0.5f, "아래" to 0.75
  * Words for one photo: type them, or tap a kept line. Size and place can be set here or by hand
  * on the slide. Kept lines stay for the next carousel too.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun TextPanel(
     frame: Frame,
@@ -673,6 +718,7 @@ private fun TextPanel(
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { if (frame.text.isEmpty() && phrases.isEmpty()) runCatching { focus.requestFocus() } }
     val text = frame.text.trim()
+    val typing = WindowInsets.isImeVisible
     PanelTitle("문구", "글씨를 끌어서 옮기고, 두 손가락으로 크기를 바꿔요", onDone)
     Column(Modifier.padding(horizontal = 16.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -684,28 +730,29 @@ private fun TextPanel(
                 maxLines = 2,
             )
             Spacer(Modifier.width(8.dp))
-            WeakButton("저장", { onKeep(text) }, Modifier.height(56.dp), enabled = text.isNotEmpty() && text !in phrases)
+            WeakButton("보관", { onKeep(text) }, Modifier.height(56.dp), enabled = text.isNotEmpty() && text !in phrases)
         }
         if (phrases.isNotEmpty()) {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 items(phrases, key = { it }) { t ->
                     Row(
-                        Modifier.height(36.dp).clip(RoundedCornerShape(18.dp))
+                        Modifier.height(40.dp).clip(RoundedCornerShape(20.dp))
                             .background(if (t == text) Tds.Blue50 else Tds.Grey100),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
                             t, fontSize = 14.sp, maxLines = 1, color = if (t == text) Tds.Blue700 else Tds.Grey800,
-                            modifier = Modifier.clickable { onFrame(frame.copy(text = t)) }.padding(start = 14.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+                            modifier = Modifier.clickable { onFrame(frame.copy(text = t)); onKeep(t) }.padding(start = 14.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
                         )
-                        Box(Modifier.size(32.dp).clickable { onForget(t) }, contentAlignment = Alignment.Center) {
+                        Box(Modifier.size(width = 44.dp, height = 40.dp).clickable { onForget(t) }, contentAlignment = Alignment.Center) {
                             Icon(Icons.Filled.Close, "지우기", tint = Tds.Grey500, modifier = Modifier.size(14.dp))
                         }
                     }
                 }
             }
         }
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        // While the keyboard is up, keep the slide in view: only the typing parts stay.
+        if (!typing) Row(verticalAlignment = Alignment.CenterVertically) {
             Text("크기", fontSize = 14.sp, color = Tds.Grey700, modifier = Modifier.width(40.dp))
             Slider(
                 value = frame.textSize,
@@ -715,13 +762,13 @@ private fun TextPanel(
                 modifier = Modifier.weight(1f),
             )
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (!typing) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Spots.forEach { (label, y) ->
                 val chosen = kotlin.math.abs(frame.textY - y) < 0.01f && frame.textX == 0.5f
                 Choice(label, chosen, Modifier.weight(1f)) { onFrame(frame.copy(textX = 0.5f, textY = y)) }
             }
         }
-        WeakButton("다른 사진에도 쓰기", onApply, Modifier.fillMaxWidth().height(48.dp), enabled = text.isNotEmpty())
+        if (!typing) WeakButton("다른 사진에도 쓰기", onApply, Modifier.fillMaxWidth().height(48.dp), enabled = text.isNotEmpty())
     }
 }
 
