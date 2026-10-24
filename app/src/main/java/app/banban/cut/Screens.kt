@@ -16,6 +16,17 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.layout.offset
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.input.pointer.positionChanged
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.isImeVisible
@@ -123,130 +134,78 @@ private fun rememberPhotos(uris: List<Uri>): Int {
     return loaded
 }
 
-private fun photoPicker() = PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-
-// ───────────────────────────── Start ─────────────────────────────
-
-/** Toss first screen: one sentence, one picture, one button. */
-@Composable
-fun HomeScreen(
-    deck: Deck,
-    update: UpdateState,
-    onPicked: (List<Uri>) -> Unit,
-    onContinue: () -> Unit,
-    onCheckUpdate: () -> Unit,
-    onInstall: (Update) -> Unit,
-    onOpenSecurity: () -> Unit = {},
-) {
-    val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(Deck.MAX_PHOTOS)) {
-        if (it.isNotEmpty()) onPicked(it)
-    }
-    Column(Modifier.fillMaxSize().background(Tds.White)) {
-        Row(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("반반컷", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Tds.Grey900)
-            Spacer(Modifier.weight(1f))
-            UpdateChip(update, onCheckUpdate, onInstall)
-        }
-        if (update is UpdateState.InstallFailed) {
-            Text(update.reason, fontSize = 13.sp, color = Tds.Red700, modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp))
-            if (update.blocked) TextButton(onClick = onOpenSecurity, modifier = Modifier.padding(start = 8.dp)) {
-                Text("보안 설정 열기", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Tds.Blue700)
-            }
-        }
-        if (update is UpdateState.NeedsPermission) {
-            Text(
-                "설정에서 '이 출처 허용'을 켜고 돌아오면 바로 이어서 받아요.",
-                fontSize = 13.sp, color = Tds.Grey700, modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
-            )
-        }
-        Column(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Spacer(Modifier.height(16.dp))
-            Text(
-                "사진을 한 번에 고르면\n캐러셀이 바로 만들어져요",
-                fontSize = 26.sp, lineHeight = 34.sp, fontWeight = FontWeight.Bold, color = Tds.Grey900,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Text(
-                "두 장씩 위아래로, 마지막 사진은 꽉 차게 들어가요.",
-                fontSize = 16.sp, color = Tds.Grey600, modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-            )
-            Box(Modifier.weight(1f).fillMaxWidth().padding(vertical = 24.dp), contentAlignment = Alignment.Center) {
-                SlideCanvas(Sample, selectedPart = null, modifier = Modifier.fillMaxHeight())
-            }
-        }
-        Column(Modifier.padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (deck.slides.isNotEmpty()) {
-                WeakButton("만들던 캐러셀 이어서 (${deck.slides.size}장)", onContinue, Modifier.fillMaxWidth().height(CtaHeight))
-            }
-            Button(onClick = { pick.launch(photoPicker()) }, modifier = Modifier.fillMaxWidth().height(CtaHeight)) {
-                Text(if (deck.slides.isEmpty()) "사진 고르기" else "새로 만들기", fontSize = 17.sp, fontWeight = FontWeight.Bold)
-            }
-        }
-    }
-}
-
-/** What the start screen shows before anything is picked: the reference look with grey photos. */
-private val Sample = Slide(
-    top = Frame(text = "Give charity.", dim = 0f),
-    bottom = Frame(text = "Tell no one.", dim = 0f),
-)
 
 // ───────────────────────────── Editor ─────────────────────────────
 
 private enum class Tool { None, Text, Dim }
-private enum class Tray { Photos, Slides }
 
 private fun spotName(slide: Slide, part: Int) = if (slide.layout == Layout.Single) "한 장" else if (part == 0) "위" else "아래"
 
+/** Every photo spot in carousel order: (slide, part). */
+private fun Deck.spots() = slides.flatMapIndexed { i, s -> s.frames.indices.map { i to it } }
+
+/** A fresh slide, starting with the look last chosen for words and darkening. */
+private fun newSlide(style: Frame) = style.copy(uri = null, text = "", zoom = 1f, x = 0f, y = 0f).let { Slide(top = it, bottom = it) }
+
 /**
- * The editor, split in two like Shardee and Instagram's Layout: the slides on top, and every picked
- * photo waiting in a tray underneath. Tap a spot on a slide, then a photo in the tray, and it goes
- * in; with no spot chosen, the photo fills the next empty one. The toolbar shows only what fits
- * what's selected. Removing never asks first; it can be undone.
+ * The whole app on one screen, like Instagram's own post editor: the slides on top and the phone's
+ * gallery underneath. Tap a photo in the gallery and it goes into an empty spot on this slide; tap
+ * it again and it comes out. Tap a photo on the slide to frame it, tap its words to edit them. Past
+ * the last slide sits a + to start another. 저장 keeps the carousel and shows it for a last look;
+ * from there it can be downloaded to the gallery.
  */
 @Composable
 fun EditorScreen(
     deck: Deck,
     onChange: (Deck) -> Unit,
-    onClose: () -> Unit,
-    onShare: (List<Uri>, Boolean) -> Unit,
+    update: UpdateState,
+    onCheckUpdate: () -> Unit,
+    onInstall: (Update) -> Unit,
+    onOpenSecurity: () -> Unit,
+    onSave: (Deck) -> Unit,
+    onOpenGallery: (List<Uri>) -> Unit,
+    onNew: () -> Unit,
+    gallery: List<Uri>? = null,
     startPart: Int? = null,
     startText: Boolean = false,
+    startSheet: Boolean = false,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
-    val count by rememberUpdatedState(deck.slides.size)
+    val room = deck.slides.size < Deck.MAX_SLIDES
+    val count by rememberUpdatedState(deck.slides.size + if (room) 1 else 0)
     val pager = rememberPagerState { count }
     var part by remember { mutableStateOf(startPart) }
     var tool by remember { mutableStateOf(if (startText) Tool.Text else Tool.None) }
-    var tray by remember { mutableStateOf(Tray.Photos) }
     var applying by remember { mutableStateOf(false) }
+    var reviewing by remember { mutableStateOf(startSheet) }
     var phrases by remember { mutableStateOf(Phrases.load(context)) }
     var exporting by remember { mutableStateOf<Int?>(null) }
     var saved by remember { mutableStateOf<List<Uri>?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
-    val page = pager.currentPage.coerceIn(0, (deck.slides.size - 1).coerceAtLeast(0))
+    val page = pager.currentPage.coerceIn(0, (count - 1).coerceAtLeast(0))
     val slide = deck.slides.getOrNull(page)
     val current by rememberUpdatedState(deck)
 
-    rememberPhotos(deck.photos)
     var settled by remember { mutableStateOf(false) }
     LaunchedEffect(pager.currentPage) {
         // Keep a selection made for the screenshots; after that, a new page starts with nothing selected.
         if (settled) { part = null; tool = Tool.None }
         settled = true
     }
-    BackHandler {
+    BackHandler(enabled = applying || reviewing || tool != Tool.None || part != null) {
         when {
             applying -> applying = false
+            reviewing -> reviewing = false
             tool != Tool.None -> tool = Tool.None
-            part != null -> part = null
-            else -> onClose()
+            else -> part = null
         }
     }
 
-    fun set(i: Int, s: Slide) = onChange(current.copy(slides = current.slides.toMutableList().also { it[i] = s }))
+    /** Any edit: an undo offer from before no longer applies, so it goes away. */
+    fun change(d: Deck) { snackbar.currentSnackbarData?.dismiss(); onChange(d) }
+    fun set(i: Int, s: Slide) = change(current.copy(slides = current.slides.toMutableList().also { it[i] = s }))
     fun setFrame(f: Frame) {
         val p = part ?: return
         val old = current.slides[page].frame(p)
@@ -254,120 +213,169 @@ fun EditorScreen(
         if (f.dim != old.dim || f.textSize != old.textSize || f.textX != old.textX || f.textY != old.textY) LastStyle.save(context, f)
     }
     fun goTo(i: Int) = scope.launch { pager.animateScrollToPage(i) }
+    fun focus(i: Int, p: Int?) = scope.launch {
+        if (pager.currentPage != i) pager.animateScrollToPage(i)
+        part = p
+        tool = Tool.None
+    }
     fun say(message: String, undo: Deck? = null) = scope.launch {
         snackbar.currentSnackbarData?.dismiss()
-        val r = snackbar.showSnackbar(message, actionLabel = if (undo != null) "되돌리기" else null)
+        // Short, with or without an undo: it shouldn't sit over the next thing being done.
+        val r = snackbar.showSnackbar(message, actionLabel = if (undo != null) "되돌리기" else null, duration = SnackbarDuration.Short)
         if (r == SnackbarResult.ActionPerformed && undo != null) onChange(undo)
     }
-
-    /** Puts a tray photo into the chosen spot, or the next empty one, or a new slide. */
-    fun place(uri: Uri) {
-        val d = current
-        val p = part
-        if (p != null) {
-            setFrame(d.slides[page].frame(p).copy(uri = uri, zoom = 1f, x = 0f, y = 0f))
-            return
-        }
-        val spot = d.firstEmpty(page)
-        if (spot != null) {
-            val (i, sp) = spot
-            set(i, d.slides[i].with(sp, d.slides[i].frame(sp).copy(uri = uri)))
-            if (i != page) goTo(i)
-            return
-        }
-        if (d.slides.size >= Deck.MAX_SLIDES) { say("슬라이드는 ${Deck.MAX_SLIDES}장까지 만들 수 있어요"); return }
-        val at = (page + 1).coerceAtMost(d.slides.size)
-        onChange(d.copy(slides = d.slides.toMutableList().also { it.add(at, Slide(top = Frame(uri))) }))
-        goTo(at)
+    fun addSlide(first: Uri? = null) {
+        val s = newSlide(LastStyle.load(context)).let { if (first != null) it.with(0, it.top.copy(uri = first)) else it }
+        change(current.copy(slides = current.slides + s))
+        goTo(current.slides.size)
     }
 
-    val addPhotos = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(Deck.MAX_PHOTOS)) { uris ->
-        if (uris.isNotEmpty()) {
-            Deck.keepAccess(context, uris)
-            val all = (current.photos + uris).distinct()
-            onChange(current.copy(photos = all.take(Deck.MAX_PHOTOS)))
-            tray = Tray.Photos
-            if (all.size > Deck.MAX_PHOTOS) say("사진은 ${Deck.MAX_PHOTOS}장까지 담을 수 있어요")
+    /** A gallery tap: out if it's already in, else into this slide's chosen or first empty spot. */
+    fun pick(uri: Uri) {
+        val d = current
+        if (d.uses(uri) > 0) {
+            fun out(f: Frame) = if (f.uri == uri) f.copy(uri = null, zoom = 1f, x = 0f, y = 0f) else f
+            change(d.copy(slides = d.slides.map { it.copy(top = out(it.top), bottom = out(it.bottom)) }))
+            return
         }
+        val s = d.slides.getOrNull(page)
+        if (s == null) {
+            if (room) addSlide(uri)
+            return
+        }
+        val target = part?.takeIf { s.frame(it).uri == null } ?: s.frames.indexOfFirst { it.uri == null }.takeIf { it >= 0 }
+        if (target == null) {
+            say("빈 칸이 없어요. 사진의 −를 눌러 빼고 넣어 주세요")
+            return
+        }
+        set(page, s.with(target, s.frame(target).copy(uri = uri, zoom = 1f, x = 0f, y = 0f)))
+    }
+
+    /** Moves the selected photo one spot back or forward in the carousel; the words stay put. */
+    fun shift(by: Int) {
+        val p = part ?: return
+        val spots = current.spots()
+        val from = spots.indexOf(page to p)
+        val to = spots.getOrNull(from + by) ?: return
+        val a = current.slides[page].frame(p)
+        val b = current.slides[to.first].frame(to.second)
+        fun photoOf(src: Frame, into: Frame) = into.copy(uri = src.uri, zoom = src.zoom, x = src.x, y = src.y, dim = src.dim)
+        val slides = current.slides.toMutableList()
+        slides[page] = slides[page].with(p, photoOf(b, a))
+        slides[to.first] = slides[to.first].with(to.second, photoOf(a, slides[to.first].frame(to.second)))
+        change(current.copy(slides = slides))
+        focus(to.first, to.second)
     }
 
     fun deleteSlide() {
         val before = current
         part = null
-        onChange(current.copy(slides = current.slides.filterIndexed { i, _ -> i != page }))
+        change(current.copy(slides = current.slides.filterIndexed { i, _ -> i != page }))
         say("슬라이드를 지웠어요", undo = before)
     }
 
-    fun export() {
+    /** 저장: keeps the carousel for next time and opens the last look before downloading. */
+    fun save() {
         val empty = current.firstEmpty()
         if (empty != null) {
             // Toss: don't stop with an error; take them to what's missing.
-            scope.launch {
-                pager.animateScrollToPage(empty.first)
-                part = empty.second
-                tool = Tool.None
-                tray = Tray.Photos
-            }
+            focus(empty.first, empty.second)
             say("빈 칸이 있어요. 아래에서 사진을 골라 넣어 주세요")
             return
         }
+        onSave(current)
+        reviewing = true
+    }
+
+    fun download() {
         exporting = 0
         scope.launch {
             runCatching { withContext(Dispatchers.IO) { Art.export(context, current) { n -> scope.launch { exporting = n } } } }
-                .onSuccess { saved = it }
-                .onFailure { error = "사진을 저장하지 못했어요. 저장 공간을 확인하고 다시 해 주세요." }
+                .onSuccess { saved = it; reviewing = false }
+                .onFailure { error = "사진을 내려받지 못했어요. 저장 공간을 확인하고 다시 해 주세요." }
             exporting = null
         }
     }
 
     Box(Modifier.fillMaxSize().background(Tds.Grey100)) {
         Column(Modifier.fillMaxSize()) {
-            // ── Navigation bar (HIG): close · position · save ──
-            Row(Modifier.fillMaxWidth().height(52.dp).background(Tds.White).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "닫기", tint = Tds.Grey900) }
+            // ── Navigation bar (HIG): version · position · save ──
+            Row(Modifier.fillMaxWidth().height(52.dp).background(Tds.White).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) { UpdateChip(update, onCheckUpdate, onInstall) }
                 Text(
-                    if (deck.slides.isEmpty()) "" else "${page + 1} / ${deck.slides.size}",
-                    Modifier.weight(1f), textAlign = TextAlign.Center, fontSize = 17.sp, fontWeight = FontWeight.Bold, color = Tds.Grey900,
+                    if (slide == null) "새 슬라이드" else "${page + 1} / ${deck.slides.size}",
+                    fontSize = 17.sp, fontWeight = FontWeight.Bold, color = Tds.Grey900,
                 )
-                TextButton(onClick = ::export, enabled = deck.slides.isNotEmpty()) {
-                    Text("저장", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = if (deck.slides.isNotEmpty()) Tds.Blue700 else Tds.Grey500)
+                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+                    // While a photo is being edited its 완료 is the one action; 저장 steps back.
+                    val canSave = deck.slides.isNotEmpty() && part == null
+                    TextButton(onClick = ::save, enabled = canSave) {
+                        Text("저장", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = if (canSave) Tds.Blue700 else Tds.Grey300)
+                    }
                 }
+            }
+            if (update is UpdateState.InstallFailed) {
+                Column(Modifier.fillMaxWidth().background(Tds.White).padding(horizontal = 20.dp, vertical = 4.dp)) {
+                    Text(update.reason, fontSize = 13.sp, color = Tds.Red700)
+                    if (update.blocked) TextButton(onClick = onOpenSecurity) {
+                        Text("보안 설정 열기", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Tds.Blue700)
+                    }
+                }
+            }
+            if (update is UpdateState.NeedsPermission) {
+                Text(
+                    "설정에서 '이 출처 허용'을 켜고 돌아오면 바로 이어서 받아요.",
+                    fontSize = 13.sp, color = Tds.Grey700, modifier = Modifier.fillMaxWidth().background(Tds.White).padding(horizontal = 20.dp, vertical = 6.dp),
+                )
             }
 
             // ── Top half: slides, side by side with the next one peeking in ──
             Box(
-                Modifier.weight(1f).fillMaxWidth()
+                Modifier.weight(1.15f).fillMaxWidth()
                     // Tapping beside the slide lets go of the photo, as tapping outside does in Photos.
                     .pointerInput(Unit) { detectTapGestures { part = null; tool = Tool.None } },
                 contentAlignment = Alignment.Center,
             ) {
-                if (deck.slides.isEmpty()) {
-                    Text("슬라이드가 없어요.\n아래 사진을 누르면 새 슬라이드가 생겨요.", color = Tds.Grey600, textAlign = TextAlign.Center)
-                } else {
-                    BoxWithConstraints(Modifier.fillMaxSize().padding(vertical = 12.dp)) {
-                        // Fit a 4:5 slide in the space, then leave the rest at the sides for the neighbours to peek.
-                        val slideW = minOf(maxWidth - 48.dp, maxHeight * 0.8f)
-                        val side = (maxWidth - slideW) / 2
-                        HorizontalPager(
-                            state = pager,
-                            contentPadding = PaddingValues(horizontal = side),
-                            pageSpacing = 12.dp,
-                            userScrollEnabled = part == null,
-                            modifier = Modifier.fillMaxSize(),
-                        ) { i ->
-                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                val mine = i == page
+                BoxWithConstraints(Modifier.fillMaxSize().padding(vertical = 10.dp)) {
+                    // Fit a 4:5 slide in the space, then leave the rest at the sides for the neighbours to peek.
+                    val slideW = minOf(maxWidth - 64.dp, maxHeight * 0.8f)
+                    val slideH = slideW * 1.25f
+                    val side = (maxWidth - slideW) / 2
+                    HorizontalPager(
+                        state = pager,
+                        contentPadding = PaddingValues(horizontal = side),
+                        pageSpacing = 12.dp,
+                        userScrollEnabled = part == null,
+                        modifier = Modifier.fillMaxSize(),
+                    ) { i ->
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            val s = deck.slides.getOrNull(i)
+                            if (s == null) {
+                                NewSlideCard(Modifier.width(slideW).height(slideH)) { if (i == page) addSlide() else goTo(i) }
+                                return@Box
+                            }
+                            val mine = i == page
+                            Box(Modifier.width(slideW).height(slideH)) {
                                 SlideCanvas(
-                                    deck.slides[i],
+                                    s,
                                     selectedPart = if (mine) part else null,
-                                    modifier = Modifier.width(slideW),
+                                    modifier = Modifier.fillMaxSize(),
                                     guide = mine && part != null,
                                     moveWords = mine && tool == Tool.Text,
-                                    onTap = { p -> if (!mine) goTo(i) else if (tool != Tool.Text || part != p) { part = if (part == p) null else p; tool = Tool.None } },
+                                    // In words mode, a tap on the photo goes back to the photo.
+                                    onTap = { p -> if (!mine) goTo(i) else if (tool != Tool.None) { tool = Tool.None; part = p } else part = if (part == p) null else p },
                                     onTapWords = { p -> if (!mine) goTo(i) else { part = p; tool = Tool.Text } },
                                     description = "슬라이드 ${i + 1}",
                                     onMove = { p, f -> set(i, current.slides[i].with(p, f)) },
                                 )
+                                if (mine && tool == Tool.None) s.frames.forEachIndexed { p, f ->
+                                    if (f.uri != null) RemoveButton(
+                                        Modifier.offset(x = slideW - 44.dp, y = if (p == 0) 0.dp else slideH / 2),
+                                    ) {
+                                        if (part == p) part = null
+                                        set(i, current.slides[i].with(p, f.copy(uri = null, zoom = 1f, x = 0f, y = 0f)))
+                                    }
+                                }
                             }
                         }
                     }
@@ -375,13 +383,13 @@ fun EditorScreen(
                 SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
             }
 
-            if (deck.slides.size > 1) Dots(deck.slides.size, page)
+            if (count > 1) Dots(count, page, plusLast = room)
 
-            // ── Bottom half: tools for what's selected, then the photo tray ──
-            Column(Modifier.fillMaxWidth().background(Tds.White).imePadding()) {
+            // ── Bottom half: tools for what's selected, then the phone's gallery ──
+            Column(Modifier.fillMaxWidth().weight(1f).background(Tds.White).imePadding()) {
                 HorizontalDivider(color = Tds.Grey200)
                 val p = part
-                if (slide != null && p != null) {
+                if (slide != null && p != null && tool != Tool.None) {
                     val frame = slide.frame(p)
                     when (tool) {
                         Tool.Text -> TextPanel(
@@ -393,64 +401,52 @@ fun EditorScreen(
                             onApply = { applying = true },
                             onDone = { tool = Tool.None },
                         )
-                        Tool.Dim -> DimPanel(frame, { setFrame(it) }) { tool = Tool.None }
-                        Tool.None -> {
-                            PanelTitle(
-                                if (slide.layout == Layout.Single) "꽉 찬 사진" else if (p == 0) "위 사진" else "아래 사진",
-                                "점선 안이 인스타에서 가려지지 않는 곳이에요",
-                            ) { part = null }
-                            ToolRow {
-                                ToolButton("문구", Glyph.Text) { tool = Tool.Text }
-                                ToolButton("어둡게", Glyph.Dim) { tool = Tool.Dim }
-                                ToolButton("맞춤", Glyph.Fit, enabled = frame.uri != null) { setFrame(frame.copy(zoom = 1f, x = 0f, y = 0f)) }
-                                ToolButton("비우기", Glyph.Delete, enabled = frame.uri != null) {
-                                    val before = current
-                                    setFrame(frame.copy(uri = null, zoom = 1f, x = 0f, y = 0f))
-                                    say("사진을 뺐어요", undo = before)
-                                }
-                            }
-                            TrayHint("아래 사진을 누르면 이 칸에 들어가요")
-                            PhotoTray(deck, onAdd = { addPhotos.launch(photoPicker()) }, onPick = ::place)
-                        }
+                        else -> DimPanel(frame, { setFrame(it) }) { tool = Tool.None }
                     }
-                } else {
+                    return@Column
+                }
+                if (slide != null && p != null) {
+                    val frame = slide.frame(p)
+                    val spots = deck.spots()
+                    val at = spots.indexOf(page to p)
+                    PanelTitle(
+                        if (slide.layout == Layout.Single) "꽉 찬 사진" else if (p == 0) "위 사진" else "아래 사진",
+                        "점선 안이 인스타에서 가려지지 않는 곳이에요",
+                    ) { part = null }
                     ToolRow {
-                        ToolButton("새 슬라이드", Glyph.Add, enabled = deck.slides.size < Deck.MAX_SLIDES) {
-                            val at = (page + 1).coerceAtMost(current.slides.size)
-                            onChange(current.copy(slides = current.slides.toMutableList().also { it.add(at, Slide()) }))
-                            goTo(at)
-                        }
-                        if (slide != null) {
-                            ToolButton("문구", Glyph.Text) { part = 0; tool = Tool.Text }
-                            ToolButton(if (slide.layout == Layout.Halves) "한 장으로" else "두 장으로", if (slide.layout == Layout.Halves) Glyph.Single else Glyph.Halves) {
-                                set(page, slide.copy(layout = if (slide.layout == Layout.Halves) Layout.Single else Layout.Halves))
-                            }
-                            ToolButton("복제", Glyph.Copy, enabled = deck.slides.size < Deck.MAX_SLIDES) {
-                                onChange(current.copy(slides = current.slides.toMutableList().also { it.add(page + 1, slide.copy(id = java.util.UUID.randomUUID().toString())) }))
-                                goTo(page + 1)
-                            }
-                            ToolButton("앞 순서로", Glyph.Left, enabled = page > 0) {
-                                onChange(current.copy(slides = current.slides.swap(page, page - 1))); goTo(page - 1)
-                            }
-                            ToolButton("뒤 순서로", Glyph.Right, enabled = page < deck.slides.lastIndex) {
-                                onChange(current.copy(slides = current.slides.swap(page, page + 1))); goTo(page + 1)
-                            }
-                            ToolButton("삭제", Glyph.Delete) { deleteSlide() }
-                        }
+                        ToolButton("문구", Glyph.Text) { tool = Tool.Text }
+                        ToolButton("어둡게", Glyph.Dim) { tool = Tool.Dim }
+                        ToolButton("맞춤", Glyph.Fit, enabled = frame.uri != null) { setFrame(frame.copy(zoom = 1f, x = 0f, y = 0f)) }
+                        ToolButton("앞 칸으로", Glyph.Left, enabled = at > 0) { shift(-1) }
+                        ToolButton("뒤 칸으로", Glyph.Right, enabled = at in 0 until spots.lastIndex) { shift(1) }
                     }
-                    Segmented(
-                        listOf("사진 ${deck.photos.size}", "슬라이드 ${deck.slides.size}"),
-                        tray.ordinal,
-                        Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                    ) { tray = Tray.entries[it] }
-                    when (tray) {
-                        Tray.Photos -> {
-                            TrayHint(if (deck.firstEmpty() != null) "사진을 누르면 빈 칸부터 채워져요" else "칸을 먼저 누르고 사진을 고르면 바꿀 수 있어요")
-                            PhotoTray(deck, onAdd = { addPhotos.launch(photoPicker()) }, onPick = ::place)
+                } else if (slide != null) {
+                    ToolRow {
+                        ToolButton(if (slide.layout == Layout.Halves) "한 장으로" else "두 장으로", if (slide.layout == Layout.Halves) Glyph.Single else Glyph.Halves) {
+                            set(page, slide.copy(layout = if (slide.layout == Layout.Halves) Layout.Single else Layout.Halves))
                         }
-                        Tray.Slides -> Strip(deck, page, onPick = { goTo(it) })
+                        ToolButton("복제", Glyph.Copy, enabled = room) {
+                            change(current.copy(slides = current.slides.toMutableList().also { it.add(page + 1, slide.copy(id = java.util.UUID.randomUUID().toString())) }))
+                            goTo(page + 1)
+                        }
+                        ToolButton("앞 순서로", Glyph.Left, enabled = page > 0) {
+                            change(current.copy(slides = current.slides.swap(page, page - 1))); goTo(page - 1)
+                        }
+                        ToolButton("뒤 순서로", Glyph.Right, enabled = page < deck.slides.lastIndex) {
+                            change(current.copy(slides = current.slides.swap(page, page + 1))); goTo(page + 1)
+                        }
+                        ToolButton("삭제", Glyph.Delete) { deleteSlide() }
                     }
                 }
+                Text(
+                    when {
+                        slide == null -> "사진을 누르면 새 슬라이드에 들어가요"
+                        slide.frames.any { it.uri == null } -> "사진을 누르면 빈 칸에 들어가요 · 다시 누르면 빠져요"
+                        else -> "넣은 사진을 다시 누르면 빠져요"
+                    },
+                    fontSize = 13.sp, color = Tds.Grey600, modifier = Modifier.padding(start = 20.dp, top = 2.dp, bottom = 6.dp),
+                )
+                GalleryGrid(deck, gallery, onPick = ::pick, modifier = Modifier.weight(1f))
             }
         }
 
@@ -463,19 +459,20 @@ fun EditorScreen(
                     val src = current.slides[page].frame(part ?: 0)
                     var slides = current.slides
                     spots.forEach { (i, sp) -> slides = slides.toMutableList().also { it[i] = it[i].with(sp, it[i].frame(sp).wordsFrom(src)) } }
-                    onChange(current.copy(slides = slides))
+                    change(current.copy(slides = slides))
                     applying = false
                     say("${spots.size}곳에 같은 문구를 넣었어요", undo = before)
                 },
                 onClose = { applying = false },
             )
         }
+        if (reviewing) SaveSheet(deck, onDownload = ::download, onClose = { reviewing = false })
         exporting?.let { n -> ExportingScreen(n, deck.slides.size) }
         saved?.let { uris ->
             DoneScreen(
                 count = uris.size,
-                onInstagram = { onShare(uris, true) },
-                onOther = { onShare(uris, false) },
+                onGallery = { onOpenGallery(uris) },
+                onNew = { saved = null; onNew(); scope.launch { pager.scrollToPage(0) } },
                 onClose = { saved = null },
             )
         }
@@ -490,10 +487,121 @@ fun EditorScreen(
     }
 }
 
+/** The page past the last slide: a dashed + that starts another. */
+@Composable
+private fun NewSlideCard(modifier: Modifier, onClick: () -> Unit) {
+    Column(
+        modifier.clip(RoundedCornerShape(4.dp)).background(Tds.White)
+            .drawBehind {
+                drawRoundRect(
+                    Tds.Grey300, style = Stroke(1.5.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(8.dp.toPx(), 6.dp.toPx()))),
+                    cornerRadius = CornerRadius(4.dp.toPx()),
+                )
+            }
+            .clickable(onClick = onClick)
+            .semantics { contentDescription = "새 슬라이드 만들기" },
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Box(Modifier.size(56.dp).background(Tds.Blue50, CircleShape), contentAlignment = Alignment.Center) {
+            Canvas(Modifier.size(24.dp)) { drawGlyph(Glyph.Add, Tds.Blue700) }
+        }
+        Text("새 슬라이드", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Tds.Grey800, modifier = Modifier.padding(top = 10.dp))
+    }
+}
+
 /**
- * One slide, drawn by the same code that saves it. Taps pick the top or bottom photo; with a photo
- * selected, drag and pinch move and zoom it, or, with [moveWords], move and resize its words.
- * [guide] shades the edges Instagram covers with its own buttons.
+ * Takes a photo off the slide. Small to look at (24) but 44 to hit, as the HIG asks, so it never
+ * covers much of the picture.
+ */
+@Composable
+private fun RemoveButton(modifier: Modifier, onClick: () -> Unit) {
+    Box(
+        modifier.size(44.dp).clickable(remember { MutableInteractionSource() }, null, onClick = onClick)
+            .semantics { contentDescription = "사진 빼기" },
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(Modifier.size(24.dp).background(Color.Black.copy(alpha = 0.55f), CircleShape).border(1.dp, Color.White.copy(alpha = 0.9f), CircleShape), contentAlignment = Alignment.Center) {
+            Canvas(Modifier.size(10.dp)) { drawLine(Color.White, Offset(0f, size.height / 2), Offset(size.width, size.height / 2), 2.dp.toPx(), StrokeCap.Round) }
+        }
+    }
+}
+
+/**
+ * The phone's photos, four across. A photo already on a slide is ringed in blue with a check.
+ * Without access yet, one plain ask; with access to only some photos, a way to share more.
+ */
+@Composable
+private fun GalleryGrid(deck: Deck, sample: List<Uri>?, onPick: (Uri) -> Unit, modifier: Modifier) {
+    val context = LocalContext.current
+    var version by remember { mutableIntStateOf(0) }
+    var access by remember { mutableStateOf(if (sample != null) Gallery.Access.All else Gallery.access(context)) }
+    var photos by remember { mutableStateOf(sample ?: emptyList()) }
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { version++ }
+    // Coming back from settings or the system's photo chooser can change what's shared.
+    LifecycleResumeEffect(Unit) { version++; onPauseOrDispose { } }
+    LaunchedEffect(version) {
+        if (sample != null) return@LaunchedEffect
+        access = Gallery.access(context)
+        if (access != Gallery.Access.None) photos = withContext(Dispatchers.IO) { Gallery.load(context) }
+    }
+
+    if (access == Gallery.Access.None) {
+        Column(modifier.fillMaxWidth().padding(horizontal = 24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+            Text("갤러리 사진을 여기서 바로 넣어요", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = Tds.Grey900)
+            Text("사진을 보려면 접근을 허용해 주세요", fontSize = 14.sp, color = Tds.Grey600, modifier = Modifier.padding(top = 4.dp, bottom = 16.dp))
+            Button(onClick = { ask.launch(Gallery.permissions) }, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                Text("사진 접근 허용", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+        return
+    }
+    Column(modifier.fillMaxWidth()) {
+        if (access == Gallery.Access.Some) {
+            Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("고른 사진만 보여요", fontSize = 13.sp, color = Tds.Grey600, modifier = Modifier.weight(1f))
+                TextButton(onClick = { ask.launch(Gallery.permissions) }) { Text("사진 더 고르기", fontSize = 14.sp, color = Tds.Blue700) }
+            }
+        }
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(4),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+            modifier = Modifier.weight(1f),
+        ) {
+            items(photos, key = { it.toString() }) { uri ->
+                val used = deck.uses(uri) > 0
+                val thumb by produceState(Gallery.peek(uri), uri) {
+                    if (value == null) value = withContext(Dispatchers.IO) { Gallery.thumb(context, uri) }
+                }
+                Box(
+                    Modifier.aspectRatio(1f).background(Tds.Grey100).clickable { onPick(uri) }
+                        .semantics { contentDescription = if (used) "넣은 사진, 누르면 빠져요" else "사진" },
+                ) {
+                    Canvas(Modifier.fillMaxSize()) {
+                        val bmp = thumb ?: return@Canvas
+                        val side = minOf(bmp.width, bmp.height)
+                        val src = android.graphics.Rect((bmp.width - side) / 2, (bmp.height - side) / 2, (bmp.width + side) / 2, (bmp.height + side) / 2)
+                        drawIntoCanvas { it.nativeCanvas.drawBitmap(bmp, src, android.graphics.RectF(0f, 0f, size.width, size.height), android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG)) }
+                        if (used) {
+                            drawRect(Color.White.copy(alpha = 0.25f))
+                            drawRect(Tds.Blue500, style = Stroke(3.dp.toPx()))
+                        }
+                    }
+                    if (used) Box(
+                        Modifier.align(Alignment.TopEnd).padding(6.dp).size(22.dp).background(Tds.Blue500, CircleShape).border(1.5.dp, Color.White, CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) { Canvas(Modifier.size(12.dp)) { drawCheck(Color.White) } }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * One slide, drawn by the same code that saves it. Taps pick the top or bottom photo, or its words;
+ * with a photo selected, drag and pinch move and zoom it, or, with [moveWords], move and resize its
+ * words. [guide] shades the edges Instagram covers with its own buttons.
  */
 @Composable
 fun SlideCanvas(
@@ -532,42 +640,65 @@ fun SlideCanvas(
             }
             .pointerInput(selectedPart, moveWords) {
                 val p = selectedPart ?: return@pointerInput
-                detectTransformGestures { _, pan, zoom, _ ->
-                    val s = latest
-                    val f = s.frame(p)
-                    val w = size.width.toFloat()
-                    val h = size.height.toFloat()
-                    val r = Art.area(s, p, w, h)
-                    if (moveWords) {
-                        val box = Art.words(s, p, w, h, face)?.second ?: return@detectTransformGestures
-                        // Snap to the middle line, the spot people aim for most.
-                        fun snap(v: Float) = if (kotlin.math.abs(v - 0.5f) < 0.03f) 0.5f else v
-                        move(p, f.copy(
-                            textX = snap(((box.centerX() + pan.x - r.left) / r.width()).coerceIn(0f, 1f)),
-                            textY = snap(((box.centerY() + pan.y - r.top) / r.height()).coerceIn(0f, 1f)),
-                            textSize = (f.textSize * zoom).coerceIn(Frame.TEXT_SIZES),
-                        ))
-                        return@detectTransformGestures
-                    }
-                    val bmp = f.uri?.let(Photos::peek) ?: return@detectTransformGestures
-                    val z = (f.zoom * zoom).coerceIn(1f, 5f)
-                    val scale = maxOf(r.width() / bmp.width, r.height() / bmp.height) * z
-                    val slackX = (bmp.width * scale - r.width()) / 2
-                    val slackY = (bmp.height * scale - r.height()) / 2
-                    move(p, f.copy(
-                        zoom = z,
-                        x = if (slackX > 0) (f.x + pan.x / slackX).coerceIn(-1f, 1f) else 0f,
-                        y = if (slackY > 0) (f.y + pan.y / slackY).coerceIn(-1f, 1f) else 0f,
-                    ))
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    var moving = false
+                    var travelled = Offset.Zero
+                    // Where the words would be with no snapping. Snapping only changes what's shown, so a
+                    // slow drag can still leave the middle line (it used to pull the words back every frame).
+                    var words: Offset? = null
+                    do {
+                        val e = awaitPointerEvent()
+                        val pan = e.calculatePan()
+                        val zoom = e.calculateZoom()
+                        if (!moving) {
+                            travelled += pan
+                            moving = travelled.getDistance() > viewConfiguration.touchSlop || zoom != 1f
+                        }
+                        if (moving && (pan != Offset.Zero || zoom != 1f)) {
+                            val s = latest
+                            val f = s.frame(p)
+                            val w = size.width.toFloat()
+                            val h = size.height.toFloat()
+                            val r = Art.area(s, p, w, h)
+                            if (moveWords) {
+                                val start = words ?: Art.words(s, p, w, h, face)?.second?.let { Offset(it.centerX(), it.centerY()) }
+                                if (start != null) {
+                                    val next = start + pan
+                                    words = next
+                                    fun snap(v: Float) = if (kotlin.math.abs(v - 0.5f) < 0.025f) 0.5f else v
+                                    move(p, f.copy(
+                                        textX = snap(((next.x - r.left) / r.width()).coerceIn(0f, 1f)),
+                                        textY = snap(((next.y - r.top) / r.height()).coerceIn(0f, 1f)),
+                                        textSize = (f.textSize * zoom).coerceIn(Frame.TEXT_SIZES),
+                                    ))
+                                }
+                            } else Photos.peek(f.uri ?: Uri.EMPTY)?.let { bmp ->
+                                val z = (f.zoom * zoom).coerceIn(1f, 5f)
+                                val scale = maxOf(r.width() / bmp.width, r.height() / bmp.height) * z
+                                val slackX = (bmp.width * scale - r.width()) / 2
+                                val slackY = (bmp.height * scale - r.height()) / 2
+                                move(p, f.copy(
+                                    zoom = z,
+                                    x = if (slackX > 0) (f.x + pan.x / slackX).coerceIn(-1f, 1f) else 0f,
+                                    y = if (slackY > 0) (f.y + pan.y / slackY).coerceIn(-1f, 1f) else 0f,
+                                ))
+                            }
+                            e.changes.forEach { if (it.positionChanged()) it.consume() }
+                        }
+                    } while (e.changes.any { it.pressed })
                 }
             },
     ) {
         @Suppress("UNUSED_EXPRESSION") loaded // redraw when a photo arrives
         drawIntoCanvas { Art.draw(it.nativeCanvas, slide, size.width, size.height, face, Photos::peek) }
         slide.frames.forEachIndexed { p, f ->
-            if (f.uri == null && f.text.isBlank()) {
+            if (f.uri == null) {
+                // An empty spot reads as "put a photo here".
                 val r = Art.area(slide, p, size.width, size.height)
-                drawGlyph(Glyph.Photo, Color.White.copy(alpha = 0.7f), Offset(r.centerX(), r.centerY()), minOf(r.width(), r.height()) * 0.18f)
+                val d = minOf(r.width(), r.height()) * 0.22f
+                drawCircle(Color.White.copy(alpha = 0.16f), d * 0.75f, Offset(r.centerX(), r.centerY()))
+                drawGlyph(Glyph.Add, Color.White.copy(alpha = 0.85f), Offset(r.centerX(), r.centerY()), d * 0.6f)
             }
         }
         if (guide) {
@@ -603,100 +734,54 @@ fun SlideCanvas(
 }
 
 @Composable
-private fun Dots(count: Int, page: Int) {
-    Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.Center) {
+private fun Dots(count: Int, page: Int, plusLast: Boolean) {
+    Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
         repeat(count) { i ->
-            Box(Modifier.padding(horizontal = 3.dp).size(6.dp).background(if (i == page) Tds.Blue500 else Tds.Grey300, CircleShape))
-        }
-    }
-}
-
-@Composable
-private fun TrayHint(text: String) {
-    Text(text, fontSize = 13.sp, color = Tds.Grey600, modifier = Modifier.padding(start = 20.dp, top = 4.dp, bottom = 6.dp))
-}
-
-/** Every picked photo, in pick order. A small number says how many spots already use it. */
-@Composable
-private fun PhotoTray(deck: Deck, onAdd: () -> Unit, onPick: (Uri) -> Unit) {
-    val loaded = rememberPhotos(deck.photos)
-    LazyRow(
-        contentPadding = PaddingValues(horizontal = 16.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-    ) {
-        item {
-            Box(
-                Modifier.size(64.dp).clip(RoundedCornerShape(10.dp)).background(Tds.Grey100).clickable(onClick = onAdd),
-                contentAlignment = Alignment.Center,
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Canvas(Modifier.size(20.dp)) { drawGlyph(Glyph.Add, Tds.Grey700) }
-                    Text("추가", fontSize = 11.sp, color = Tds.Grey700)
-                }
-            }
-        }
-        items(deck.photos, key = { it.toString() }) { uri ->
-            val uses = deck.uses(uri)
-            val label = "사진 ${deck.photos.indexOf(uri) + 1}" + if (uses > 0) ", ${uses}곳에 쓰임" else ""
-            Box(Modifier.size(64.dp).clip(RoundedCornerShape(10.dp)).clickable { onPick(uri) }.semantics { contentDescription = label }) {
-                Canvas(Modifier.fillMaxSize().background(Tds.Grey200)) {
-                    @Suppress("UNUSED_EXPRESSION") loaded
-                    val bmp = Photos.peek(uri) ?: return@Canvas
-                    // Centre crop to a square.
-                    val side = minOf(bmp.width, bmp.height)
-                    val src = android.graphics.Rect((bmp.width - side) / 2, (bmp.height - side) / 2, (bmp.width + side) / 2, (bmp.height + side) / 2)
-                    drawIntoCanvas { it.nativeCanvas.drawBitmap(bmp, src, android.graphics.RectF(0f, 0f, size.width, size.height), android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG)) }
-                }
-                if (uses > 0) {
-                    Box(
-                        Modifier.align(Alignment.TopEnd).padding(4.dp).size(20.dp).background(Tds.Blue500, CircleShape),
-                        contentAlignment = Alignment.Center,
-                    ) { Text("$uses", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White) }
-                }
+            val on = i == page
+            if (plusLast && i == count - 1) {
+                Canvas(Modifier.padding(horizontal = 3.dp).size(8.dp)) { drawGlyph(Glyph.Add, if (on) Tds.Blue500 else Tds.Grey300) }
+            } else {
+                Box(Modifier.padding(horizontal = 3.dp).size(6.dp).background(if (on) Tds.Blue500 else Tds.Grey300, CircleShape))
             }
         }
     }
 }
 
-/** HIG segmented control: grey track, the chosen part raised in white. */
+/** The last look before downloading: every slide as it will be saved, swipe through. */
 @Composable
-private fun Segmented(labels: List<String>, chosen: Int, modifier: Modifier = Modifier, onChoose: (Int) -> Unit) {
-    Row(modifier.fillMaxWidth().height(40.dp).clip(RoundedCornerShape(10.dp)).background(Tds.Grey100).padding(2.dp)) {
-        labels.forEachIndexed { i, label ->
-            Box(
-                Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(7.dp))
-                    .background(if (i == chosen) Tds.White else Color.Transparent)
-                    .clickable { onChoose(i) },
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(label, fontSize = 14.sp, fontWeight = if (i == chosen) FontWeight.Bold else FontWeight.Normal, color = if (i == chosen) Tds.Grey900 else Tds.Grey600)
+fun SaveSheet(deck: Deck, onDownload: () -> Unit, onClose: () -> Unit) {
+    val pager = rememberPagerState { deck.slides.size }
+    Column(Modifier.fillMaxSize().background(Tds.White).clickable(remember { MutableInteractionSource() }, null) {}) {
+        Row(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "닫기", tint = Tds.Grey900) }
+        }
+        Text("저장했어요", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Tds.Grey900, modifier = Modifier.padding(horizontal = 20.dp))
+        Text(
+            "다음에 열면 이어서 고칠 수 있어요. 이대로 갤러리에 내려받을까요?",
+            fontSize = 15.sp, color = Tds.Grey600, modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 8.dp),
+        )
+        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().background(Tds.Grey100).padding(vertical = 16.dp)) {
+            val slideW = minOf(maxWidth - 64.dp, maxHeight * 0.8f)
+            HorizontalPager(
+                state = pager,
+                contentPadding = PaddingValues(horizontal = (maxWidth - slideW) / 2),
+                pageSpacing = 12.dp,
+                modifier = Modifier.fillMaxSize(),
+            ) { i ->
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    SlideCanvas(deck.slides[i], null, Modifier.width(slideW), description = "슬라이드 ${i + 1}")
+                }
             }
         }
-    }
-}
-
-/** Every slide small, in order; tap one to go there. */
-@Composable
-private fun Strip(deck: Deck, page: Int, onPick: (Int) -> Unit) {
-    val list = rememberLazyListState()
-    LaunchedEffect(page) { if (deck.slides.isNotEmpty()) list.animateScrollToItem(page) }
-    LazyRow(
-        state = list,
-        contentPadding = PaddingValues(horizontal = 16.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 12.dp),
-    ) {
-        itemsIndexed(deck.slides, key = { _, s -> s.id }) { i, s ->
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Box(
-                    Modifier.width(48.dp)
-                        .border(if (i == page) 2.dp else 0.dp, if (i == page) Tds.Blue500 else Color.Transparent, RoundedCornerShape(4.dp))
-                        .padding(2.dp)
-                        .clickable { onPick(i) },
-                ) { SlideCanvas(s, null, Modifier.fillMaxWidth(), onTap = { onPick(i) }) }
-                Text("${i + 1}", fontSize = 11.sp, color = if (i == page) Tds.Blue700 else Tds.Grey600)
+        Text(
+            "${pager.currentPage + 1} / ${deck.slides.size}",
+            fontSize = 14.sp, color = Tds.Grey600, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+        )
+        Column(Modifier.padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = onDownload, modifier = Modifier.fillMaxWidth().height(CtaHeight)) {
+                Text("갤러리에 내려받기 (${deck.slides.size}장)", fontSize = 17.sp, fontWeight = FontWeight.Bold)
             }
+            WeakButton("계속 고치기", onClose, Modifier.fillMaxWidth().height(CtaHeight))
         }
     }
 }
@@ -740,7 +825,10 @@ private fun TextPanel(
             OutlinedTextField(
                 value = frame.text,
                 onValueChange = { onFrame(frame.copy(text = it)) },
-                placeholder = { Text("예: Give charity.") },
+                placeholder = { Text("문구를 입력해 주세요") },
+                trailingIcon = if (frame.text.isEmpty()) null else {
+                    { IconButton(onClick = { onFrame(frame.copy(text = "")) }) { Icon(Icons.Filled.Close, "문구 지우기", tint = Tds.Grey500) } }
+                },
                 modifier = Modifier.weight(1f).focusRequester(focus).onFocusChanged { focused = it.isFocused },
                 maxLines = 2,
             )
@@ -962,21 +1050,21 @@ private fun ExportingScreen(done: Int, total: Int) {
     }
 }
 
-/** Toss-style result: a drawn check, one sentence, one main button at the bottom. */
+/** Toss-style result: a drawn check, one sentence, the next two things people do. */
 @Composable
-fun DoneScreen(count: Int, onInstagram: () -> Unit, onOther: () -> Unit, onClose: () -> Unit) {
+fun DoneScreen(count: Int, onGallery: () -> Unit, onNew: () -> Unit, onClose: () -> Unit) {
     BackHandler(onBack = onClose)
     Column(Modifier.fillMaxSize().background(Tds.White).clickable(remember { MutableInteractionSource() }, null) {}.padding(20.dp)) {
         IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "닫기", tint = Tds.Grey700) }
         Column(Modifier.weight(1f).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
             DrawnCheck(Modifier.size(72.dp))
-            Text("${count}장을 갤러리에 저장했어요", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Tds.Grey900, modifier = Modifier.padding(top = 20.dp))
-            Text("순서대로 올리면 캐러셀이 돼요", fontSize = 15.sp, color = Tds.Grey600, modifier = Modifier.padding(top = 6.dp))
+            Text("${count}장을 갤러리에 내려받았어요", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Tds.Grey900, modifier = Modifier.padding(top = 20.dp))
+            Text("인스타그램에서 순서대로 고르면 캐러셀이 돼요", fontSize = 15.sp, color = Tds.Grey600, modifier = Modifier.padding(top = 6.dp))
         }
-        Button(onClick = onInstagram, modifier = Modifier.fillMaxWidth().height(CtaHeight)) {
-            Text("인스타그램에 올리기", fontSize = 17.sp, fontWeight = FontWeight.Bold)
+        Button(onClick = onGallery, modifier = Modifier.fillMaxWidth().height(CtaHeight)) {
+            Text("갤러리로 가기", fontSize = 17.sp, fontWeight = FontWeight.Bold)
         }
-        WeakButton("다른 앱으로 보내기", onOther, Modifier.fillMaxWidth().padding(top = 8.dp).height(CtaHeight))
+        WeakButton("새로 만들기", onNew, Modifier.fillMaxWidth().padding(top = 8.dp).height(CtaHeight))
     }
 }
 

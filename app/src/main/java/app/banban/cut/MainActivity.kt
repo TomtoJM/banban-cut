@@ -38,10 +38,9 @@ class MainActivity : ComponentActivity() {
             BanbanTheme {
                 Surface(Modifier.fillMaxSize()) {
                     Box(Modifier.safeDrawingPadding()) {
-                        var deck by remember { mutableStateOf(Deck.load(ctx)) }
-                        var editing by remember { mutableStateOf(false) }
+                        // No start screen: the app opens on the carousel being made, or a blank first slide.
+                        var deck by remember { mutableStateOf(Deck.load(ctx).orBlank(ctx)) }
                         var checks by remember { mutableIntStateOf(0) }
-                        val scope = rememberCoroutineScope()
 
                         LaunchedEffect(Unit) { withContext(Dispatchers.IO) { Updater.cleanUp(ctx) } }
                         LaunchedEffect(checks) {
@@ -54,32 +53,31 @@ class MainActivity : ComponentActivity() {
                             Deck.save(ctx, deck)
                         }
 
-                        if (editing) {
-                            EditorScreen(
-                                deck = deck,
-                                onChange = { deck = it },
-                                onClose = { editing = false },
-                                onShare = ::share,
-                            )
-                        } else {
-                            HomeScreen(
-                                deck = deck,
-                                update = update,
-                                onPicked = { uris ->
-                                    Deck.keepAccess(ctx, uris)
-                                    deck = Deck.start(uris, LastStyle.load(ctx))
-                                    editing = true
-                                },
-                                onContinue = { editing = true },
-                                onCheckUpdate = { checks++ },
-                                onInstall = ::install,
-                                onOpenSecurity = ::openSecurity,
-                            )
-                        }
+                        EditorScreen(
+                            deck = deck,
+                            onChange = { deck = it },
+                            update = update,
+                            onCheckUpdate = { checks++ },
+                            onInstall = ::install,
+                            onOpenSecurity = ::openSecurity,
+                            onSave = { Deck.save(ctx, it) },
+                            onOpenGallery = ::openGallery,
+                            onNew = { deck = Deck().orBlank(ctx) },
+                        )
                     }
                 }
             }
         }
+    }
+
+    private fun Deck.orBlank(context: android.content.Context) =
+        if (slides.isNotEmpty()) this else Deck(listOf(LastStyle.load(context).copy(uri = null, text = "").let { Slide(top = it, bottom = it) }))
+
+    /** Opens the first downloaded slide in the phone's gallery app; the rest sit next to it. */
+    private fun openGallery(uris: List<Uri>) {
+        val view = Intent(Intent.ACTION_VIEW).setDataAndType(uris.firstOrNull() ?: return, "image/jpeg")
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        runCatching { startActivity(view) }
     }
 
     /**
@@ -127,18 +125,4 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** Sends every saved slide at once; Instagram turns a multi-photo share into a carousel post. */
-    private fun share(uris: List<Uri>, instagram: Boolean) {
-        val send = Intent(Intent.ACTION_SEND_MULTIPLE).setType("image/jpeg")
-            .putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
-            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        val app = send.clone() as Intent
-        app.setPackage(INSTAGRAM)
-        if (instagram && app.resolveActivity(packageManager) != null) startActivity(app)
-        else startActivity(Intent.createChooser(send, null))
-    }
-
-    private companion object {
-        const val INSTAGRAM = "com.instagram.android"
-    }
 }

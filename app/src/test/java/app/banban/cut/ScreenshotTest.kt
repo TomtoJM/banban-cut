@@ -62,29 +62,38 @@ class ScreenshotTest {
 
     private fun shoot(name: String) = compose.onRoot().captureRoboImage("build/screens/$name.png")
 
-    @Test fun home() {
-        compose.setContent { Themed { HomeScreen(Deck(), UpdateState.Latest, {}, {}, {}, {}) } }
-        shoot("1-start")
-    }
+    @Composable
+    private fun Editor(d: Deck = deck, gallery: List<Uri>? = (1..4).map(::uri), part: Int? = null, text: Boolean = false, sheet: Boolean = false) =
+        EditorScreen(d, {}, UpdateState.Latest, {}, {}, {}, {}, {}, {}, gallery, part, text, sheet)
 
     @Test fun editor() {
-        compose.setContent { Themed { EditorScreen(deck, {}, {}, { _, _ -> }) } }
-        shoot("2-editor")
+        compose.setContent { Themed { Editor() } }
+        shoot("1-editor")
     }
 
     @Test fun photoSelected() {
-        compose.setContent { Themed { EditorScreen(deck, {}, {}, { _, _ -> }, startPart = 1) } }
-        shoot("3-photo")
+        compose.setContent { Themed { Editor(part = 0) } }
+        shoot("2-photo")
     }
 
     @Test fun words() {
-        compose.setContent { Themed { EditorScreen(deck, {}, {}, { _, _ -> }, startPart = 0, startText = true) } }
-        shoot("4-words")
+        compose.setContent { Themed { Editor(part = 0, text = true) } }
+        shoot("3-words")
     }
 
     @Test fun applyWords() {
         compose.setContent { Themed { ApplySheet(deck, 0 to 0, {}, {}) } }
-        shoot("5-apply")
+        shoot("4-apply")
+    }
+
+    @Test fun review() {
+        compose.setContent { Themed { Editor(sheet = true) } }
+        shoot("5-review")
+    }
+
+    @Test fun firstOpen() {
+        compose.setContent { Themed { Editor(d = Deck(listOf(Slide())), gallery = null) } }
+        shoot("7-first-open")
     }
 
     /**
@@ -115,6 +124,6 @@ class ScreenshotTest {
 
     @Test fun saved() {
         compose.setContent { Themed { DoneScreen(3, {}, {}, {}) } }
-        shoot("6-saved")
+        shoot("6-done")
     }
 }

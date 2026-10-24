@@ -17,7 +17,7 @@ data class Frame(
     val x: Float = 0f,
     val y: Float = 0f,
     /** How much the photo is darkened so white words stay readable, 0..0.7. */
-    val dim: Float = 0.3f,
+    val dim: Float = 0f,
     /** Letter height as a share of the slide width, so the words look the same at any output size. */
     val textSize: Float = TEXT_SIZE,
     /** Centre of the words inside this photo's area, 0..1 on each axis. */
@@ -43,7 +43,7 @@ data class Frame(
             zoom = o.optDouble("zoom", 1.0).toFloat(),
             x = o.optDouble("x", 0.0).toFloat(),
             y = o.optDouble("y", 0.0).toFloat(),
-            dim = o.optDouble("dim", 0.3).toFloat(),
+            dim = o.optDouble("dim", 0.0).toFloat(),
             // Earlier versions saved a named size.
             textSize = if (o.has("size")) o.optDouble("size").toFloat()
                 else when (o.optString("textSize")) { "Small" -> 0.05f; "Large" -> 0.085f; else -> TEXT_SIZE },
@@ -184,7 +184,7 @@ object Phrases {
  */
 object LastStyle {
     private const val PREFS = "style"
-    private const val KEY = "frame"
+    private const val KEY = "frame2"
 
     fun load(context: Context): Frame =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY, null)
