@@ -50,6 +50,9 @@ jobs:
       - name: Screenshots
         continue-on-error: true
         run: |
+          # Free stock photos (picsum.photos, Unsplash licence) for the sample carousel.
+          mkdir -p app/build/sample
+          n=1; for id in 20 1 60 4 180 42 119; do curl -sfL -o "app/build/sample/$n.jpg" "https://picsum.photos/id/$id/1600/1200" || true; n=$((n+1)); done
           ./gradlew --no-daemon testDebugUnitTest --tests app.banban.cut.ScreenshotTest
           mkdir -p shots
           for f in app/build/screens/*.png; do cp "$f" "shots/screen-$(basename "$f")"; done

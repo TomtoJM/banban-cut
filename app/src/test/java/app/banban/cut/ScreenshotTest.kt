@@ -1,6 +1,7 @@
 package app.banban.cut
 
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.LinearGradient
 import android.graphics.Paint
@@ -11,6 +12,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onRoot
 import com.github.takahirom.roborazzi.captureRoboImage
+import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -19,6 +21,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import java.io.File
 
 /**
  * Renders the app's screens to PNGs on CI, so each release can be looked at on a computer
@@ -82,6 +85,32 @@ class ScreenshotTest {
     @Test fun applyWords() {
         compose.setContent { Themed { ApplySheet(deck, 0 to 0, {}, {}) } }
         shoot("5-apply")
+    }
+
+    /**
+     * A finished carousel, drawn at full size by the same code the app saves with. Needs the
+     * stock photos CI downloads into build/sample; skipped without them.
+     */
+    @Test fun sampleCarousel() {
+        val dir = File("build/sample")
+        val files = (1..7).map { File(dir, "$it.jpg") }
+        assumeTrue(files.all { it.exists() })
+        val photos = files.mapIndexed { i, f ->
+            Uri.parse("file://sample/${i + 1}").also { Photos.put(it, BitmapFactory.decodeFile(f.path)) }
+        }
+        val sample = Deck(listOf(
+            Slide(top = Frame(photos[0], "Write it down."), bottom = Frame(photos[1], "Then do it.")),
+            Slide(top = Frame(photos[2], "Start small."), bottom = Frame(photos[3], "Stay consistent.")),
+            Slide(top = Frame(photos[4], "One task."), bottom = Frame(photos[5], "One check.")),
+            Slide(layout = Layout.Single, top = Frame(photos[6], "Small wins\nadd up.", dim = 0.4f, textSize = 0.09f)),
+        ))
+        val face = Art.typeface(RuntimeEnvironment.getApplication())
+        File("build/screens").mkdirs()
+        sample.slides.forEachIndexed { i, slide ->
+            val bmp = Bitmap.createBitmap(Deck.WIDTH, Deck.HEIGHT, Bitmap.Config.ARGB_8888)
+            Art.draw(Canvas(bmp), slide, Deck.WIDTH.toFloat(), Deck.HEIGHT.toFloat(), face, Photos::peek)
+            File("build/screens/carousel-${i + 1}.png").outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        }
     }
 
     @Test fun saved() {
