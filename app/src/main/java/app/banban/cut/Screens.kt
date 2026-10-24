@@ -762,8 +762,13 @@ fun ApplySheet(deck: Deck, from: Pair<Int, Int>, onApply: (List<Pair<Int, Int>>)
                 val on = spot in chosen
                 val toggle = { chosen = if (on) chosen - spot else chosen + spot }
                 Column(Modifier.clickable { toggle() }) {
-                    Box {
-                        SlideCanvas(s, selectedPart = if (s.layout == Layout.Halves) p else null, modifier = Modifier.fillMaxWidth(), onTap = { toggle() })
+                    Box(Modifier.border(if (on) 3.dp else 0.dp, if (on) Tds.Blue500 else Color.Transparent, RoundedCornerShape(6.dp)).padding(3.dp)) {
+                        SlideCanvas(s, selectedPart = null, modifier = Modifier.fillMaxWidth(), onTap = { toggle() })
+                        // Wash out the other half so it's clear which photo this spot is.
+                        if (s.layout == Layout.Halves) Box(
+                            Modifier.align(if (p == 0) Alignment.BottomCenter else Alignment.TopCenter)
+                                .fillMaxWidth().fillMaxHeight(0.5f).background(Color.White.copy(alpha = 0.7f)),
+                        )
                         Box(
                             Modifier.align(Alignment.TopEnd).padding(6.dp).size(24.dp)
                                 .background(if (on) Tds.Blue500 else Color.Black.copy(alpha = 0.25f), CircleShape)
