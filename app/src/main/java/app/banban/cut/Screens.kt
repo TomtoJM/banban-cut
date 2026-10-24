@@ -61,6 +61,7 @@ import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -111,6 +112,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
@@ -740,23 +742,11 @@ fun SaveSheet(deck: Deck, onDownload: () -> Unit, onClose: () -> Unit) {
             "다음에 열면 이어서 고칠 수 있어요. 이대로 갤러리에 내려받을까요?",
             fontSize = 15.sp, color = Tds.Grey600, modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 8.dp),
         )
-        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().background(Tds.Grey100).padding(vertical = 16.dp)) {
-            val slideW = minOf(maxWidth - 64.dp, maxHeight * 0.8f)
-            HorizontalPager(
-                state = pager,
-                contentPadding = PaddingValues(horizontal = (maxWidth - slideW) / 2),
-                pageSpacing = 12.dp,
-                modifier = Modifier.fillMaxSize(),
-            ) { i ->
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    SlideCanvas(deck.slides[i], null, Modifier.width(slideW), description = "슬라이드 ${i + 1}")
-                }
-            }
+        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().background(Tds.Grey100).padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
+            // Room for the post's name row above and the buttons and dots below.
+            val slideW = minOf(maxWidth - 32.dp, (maxHeight - 112.dp) * 0.8f)
+            InstagramPost(deck, pager, slideW)
         }
-        Text(
-            "${pager.currentPage + 1} / ${deck.slides.size}",
-            fontSize = 14.sp, color = Tds.Grey600, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-        )
         Column(Modifier.padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = onDownload, modifier = Modifier.fillMaxWidth().height(CtaHeight)) {
                 Text("갤러리에 내려받기 (${deck.slides.size}장)", fontSize = 17.sp, fontWeight = FontWeight.Bold)
@@ -764,6 +754,65 @@ fun SaveSheet(deck: Deck, onDownload: () -> Unit, onClose: () -> Unit) {
             WeakButton("계속 고치기", onClose, Modifier.fillMaxWidth().height(CtaHeight))
         }
     }
+}
+
+/**
+ * A rough Instagram feed post around the slides, so it's clear what the edges will look like
+ * under Instagram's own name row, page count and buttons. Not exact, just close enough to judge.
+ */
+@Composable
+private fun InstagramPost(deck: Deck, pager: PagerState, slideW: Dp) {
+    val ink = Color(0xFF262626)
+    Column(Modifier.width(slideW).clip(RoundedCornerShape(12.dp)).background(Color.White)) {
+        Row(Modifier.fillMaxWidth().height(44.dp).padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(28.dp).border(1.5.dp, Color(0xFFD62976), CircleShape).padding(3.dp).background(Tds.Grey200, CircleShape))
+            Text("내 계정", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = ink, modifier = Modifier.padding(start = 8.dp).weight(1f))
+            Text("•••", fontSize = 12.sp, color = ink)
+        }
+        Box(Modifier.width(slideW).height(slideW * 1.25f)) {
+            HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()) { i ->
+                SlideCanvas(deck.slides[i], null, Modifier.width(slideW), description = "슬라이드 ${i + 1}")
+            }
+            if (deck.slides.size > 1) Text(
+                "${pager.currentPage + 1}/${deck.slides.size}",
+                fontSize = 12.sp, color = Color.White,
+                modifier = Modifier.align(Alignment.TopEnd).padding(10.dp)
+                    .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(12.dp)).padding(horizontal = 8.dp, vertical = 3.dp),
+            )
+        }
+        Box(Modifier.fillMaxWidth().height(44.dp).padding(horizontal = 10.dp)) {
+            Row(Modifier.align(Alignment.CenterStart), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                PostIcon(ink) { w -> // heart
+                    moveTo(0.5f * w, 0.88f * w); cubicTo(0.1f * w, 0.6f * w, 0.02f * w, 0.4f * w, 0.1f * w, 0.24f * w)
+                    cubicTo(0.2f * w, 0.06f * w, 0.42f * w, 0.08f * w, 0.5f * w, 0.26f * w)
+                    cubicTo(0.58f * w, 0.08f * w, 0.8f * w, 0.06f * w, 0.9f * w, 0.24f * w)
+                    cubicTo(0.98f * w, 0.4f * w, 0.9f * w, 0.6f * w, 0.5f * w, 0.88f * w); close()
+                }
+                PostIcon(ink) { w -> // comment
+                    addOval(androidx.compose.ui.geometry.Rect(0.08f * w, 0.1f * w, 0.92f * w, 0.9f * w))
+                }
+                PostIcon(ink) { w -> // share
+                    moveTo(0.06f * w, 0.14f * w); lineTo(0.94f * w, 0.14f * w); lineTo(0.48f * w, 0.92f * w); lineTo(0.4f * w, 0.44f * w); close()
+                }
+            }
+            if (deck.slides.size > 1) Row(Modifier.align(Alignment.Center), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                repeat(minOf(deck.slides.size, 5)) { d ->
+                    val on = d == minOf(pager.currentPage, 4)
+                    Box(Modifier.size(6.dp).background(if (on) Color(0xFF0095F6) else Tds.Grey300, CircleShape))
+                }
+            }
+            Box(Modifier.align(Alignment.CenterEnd)) {
+                PostIcon(ink) { w -> // save
+                    moveTo(0.2f * w, 0.08f * w); lineTo(0.8f * w, 0.08f * w); lineTo(0.8f * w, 0.92f * w); lineTo(0.5f * w, 0.66f * w); lineTo(0.2f * w, 0.92f * w); close()
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PostIcon(c: Color, shape: Path.(Float) -> Unit) = Canvas(Modifier.size(22.dp)) {
+    drawPath(Path().apply { shape(size.width) }, c, style = Stroke(1.8.dp.toPx(), join = StrokeJoin.Round))
 }
 
 @Composable
