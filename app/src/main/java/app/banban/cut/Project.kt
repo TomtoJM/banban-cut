@@ -24,9 +24,6 @@ data class Frame(
     val textX: Float = 0.5f,
     val textY: Float = 0.5f,
 ) {
-    /** The words and how they sit, without the photo: what "use on other photos" copies. */
-    fun wordsFrom(o: Frame) = copy(text = o.text, textSize = o.textSize, textX = o.textX, textY = o.textY)
-
     fun toJson(): JSONObject = JSONObject()
         .put("uri", uri?.toString()).put("text", text)
         .put("zoom", zoom.toDouble()).put("x", x.toDouble()).put("y", y.toDouble())
@@ -167,9 +164,12 @@ object Phrases {
     private const val PREFS = "phrases"
     private const val KEY = "list"
 
+    /** The lines early versions showed as examples; they are not the user's own. */
+    private val samples = setOf("Give charity.", "Tell no one.")
+
     fun load(context: Context): List<String> {
         val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY, null) ?: return emptyList()
-        return runCatching { JSONArray(raw).let { a -> (0 until a.length()).map(a::getString) } }.getOrDefault(emptyList())
+        return runCatching { JSONArray(raw).let { a -> (0 until a.length()).map(a::getString) } }.getOrDefault(emptyList()) - samples
     }
 
     fun save(context: Context, list: List<String>) {

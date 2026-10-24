@@ -139,7 +139,6 @@ private fun rememberPhotos(uris: List<Uri>): Int {
 
 private enum class Tool { None, Text, Dim }
 
-private fun spotName(slide: Slide, part: Int) = if (slide.layout == Layout.Single) "한 장" else if (part == 0) "위" else "아래"
 
 /** Every photo spot in carousel order: (slide, part). */
 private fun Deck.spots() = slides.flatMapIndexed { i, s -> s.frames.indices.map { i to it } }
@@ -178,7 +177,6 @@ fun EditorScreen(
     val pager = rememberPagerState { count }
     var part by remember { mutableStateOf(startPart) }
     var tool by remember { mutableStateOf(if (startText) Tool.Text else Tool.None) }
-    var applying by remember { mutableStateOf(false) }
     var reviewing by remember { mutableStateOf(startSheet) }
     var phrases by remember { mutableStateOf(Phrases.load(context)) }
     var exporting by remember { mutableStateOf<Int?>(null) }
@@ -194,9 +192,8 @@ fun EditorScreen(
         if (settled) { part = null; tool = Tool.None }
         settled = true
     }
-    BackHandler(enabled = applying || reviewing || tool != Tool.None || part != null) {
+    BackHandler(enabled = reviewing || tool != Tool.None || part != null) {
         when {
-            applying -> applying = false
             reviewing -> reviewing = false
             tool != Tool.None -> tool = Tool.None
             else -> part = null
@@ -398,7 +395,6 @@ fun EditorScreen(
                             onFrame = { setFrame(it) },
                             onKeep = { t -> phrases = (listOf(t) + phrases).distinct(); Phrases.save(context, phrases) },
                             onForget = { t -> phrases = phrases - t; Phrases.save(context, phrases) },
-                            onApply = { applying = true },
                             onDone = { tool = Tool.None },
                         )
                         else -> DimPanel(frame, { setFrame(it) }) { tool = Tool.None }
@@ -450,22 +446,6 @@ fun EditorScreen(
             }
         }
 
-        if (applying && slide != null && part != null) {
-            ApplySheet(
-                deck = deck,
-                from = page to (part ?: 0),
-                onApply = { spots ->
-                    val before = current
-                    val src = current.slides[page].frame(part ?: 0)
-                    var slides = current.slides
-                    spots.forEach { (i, sp) -> slides = slides.toMutableList().also { it[i] = it[i].with(sp, it[i].frame(sp).wordsFrom(src)) } }
-                    change(current.copy(slides = slides))
-                    applying = false
-                    say("${spots.size}곳에 같은 문구를 넣었어요", undo = before)
-                },
-                onClose = { applying = false },
-            )
-        }
         if (reviewing) SaveSheet(deck, onDownload = ::download, onClose = { reviewing = false })
         exporting?.let { n -> ExportingScreen(n, deck.slides.size) }
         saved?.let { uris ->
@@ -811,7 +791,6 @@ private fun TextPanel(
     onFrame: (Frame) -> Unit,
     onKeep: (String) -> Unit,
     onForget: (String) -> Unit,
-    onApply: () -> Unit,
     onDone: () -> Unit,
 ) {
     val focus = remember { FocusRequester() }
@@ -871,72 +850,6 @@ private fun TextPanel(
                 Choice(label, chosen, Modifier.weight(1f)) { onFrame(frame.copy(textX = 0.5f, textY = y)) }
             }
         }
-        if (!typing) WeakButton("다른 사진에도 쓰기", onApply, Modifier.fillMaxWidth().height(48.dp), enabled = text.isNotEmpty())
-    }
-}
-
-/**
- * Picks the other photos that should get the same words, size and place. Spots with no words yet
- * start ticked, since that's usually what's wanted.
- */
-@Composable
-fun ApplySheet(deck: Deck, from: Pair<Int, Int>, onApply: (List<Pair<Int, Int>>) -> Unit, onClose: () -> Unit) {
-    val spots = remember(deck) {
-        deck.slides.flatMapIndexed { i, s -> s.frames.indices.map { i to it } }.filter { it != from }
-    }
-    var chosen by remember { mutableStateOf(spots.filter { (i, p) -> deck.slides[i].frame(p).text.isBlank() }.toSet()) }
-    val words = deck.slides.getOrNull(from.first)?.frame(from.second)?.text?.trim().orEmpty()
-    Column(Modifier.fillMaxSize().background(Tds.White).clickable(remember { MutableInteractionSource() }, null) {}) {
-        Row(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "닫기", tint = Tds.Grey900) }
-            Spacer(Modifier.weight(1f))
-            TextButton(onClick = { chosen = if (chosen.size == spots.size) emptySet() else spots.toSet() }) {
-                Text(if (chosen.size == spots.size) "모두 해제" else "모두 선택", fontSize = 16.sp, color = Tds.Blue700)
-            }
-        }
-        Text("어느 사진에 쓸까요?", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Tds.Grey900, modifier = Modifier.padding(horizontal = 20.dp))
-        Text(
-            "‘$words’를 크기와 위치 그대로 넣어요",
-            fontSize = 15.sp, color = Tds.Grey600, maxLines = 2, modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 12.dp),
-        )
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(3),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.weight(1f),
-        ) {
-            items(spots, key = { "${it.first}-${it.second}" }) { spot ->
-                val (i, p) = spot
-                val s = deck.slides[i]
-                val on = spot in chosen
-                val toggle = { chosen = if (on) chosen - spot else chosen + spot }
-                Column(Modifier.clickable { toggle() }) {
-                    Box(Modifier.border(if (on) 3.dp else 0.dp, if (on) Tds.Blue500 else Color.Transparent, RoundedCornerShape(6.dp)).padding(3.dp)) {
-                        SlideCanvas(s, selectedPart = null, modifier = Modifier.fillMaxWidth(), onTap = { toggle() })
-                        // Wash out the other half so it's clear which photo this spot is.
-                        if (s.layout == Layout.Halves) Box(Modifier.matchParentSize()) {
-                            Box(
-                                Modifier.align(if (p == 0) Alignment.BottomCenter else Alignment.TopCenter)
-                                    .fillMaxWidth().fillMaxHeight(0.5f).background(Color.White.copy(alpha = 0.7f)),
-                            )
-                        }
-                        Box(
-                            Modifier.align(Alignment.TopEnd).padding(6.dp).size(24.dp)
-                                .background(if (on) Tds.Blue500 else Color.Black.copy(alpha = 0.25f), CircleShape)
-                                .border(1.5.dp, Color.White, CircleShape),
-                            contentAlignment = Alignment.Center,
-                        ) { if (on) Canvas(Modifier.size(14.dp)) { drawCheck(Color.White) } }
-                    }
-                    Text("${i + 1} · ${spotName(s, p)}", fontSize = 13.sp, color = if (on) Tds.Blue700 else Tds.Grey600, modifier = Modifier.padding(top = 4.dp))
-                }
-            }
-        }
-        Button(
-            onClick = { onApply(spots.filter { it in chosen }) },
-            enabled = chosen.isNotEmpty(),
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp).height(CtaHeight),
-        ) { Text(if (chosen.isEmpty()) "사진을 골라 주세요" else "${chosen.size}곳에 쓰기", fontSize = 17.sp, fontWeight = FontWeight.Bold) }
     }
 }
 

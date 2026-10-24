@@ -45,12 +45,12 @@ class ScreenshotTest {
             })
             Photos.put(uri(i + 1), bmp)
         }
-        Phrases.save(RuntimeEnvironment.getApplication(), listOf("Give charity.", "Tell no one.", "Link in bio"))
+        Phrases.save(RuntimeEnvironment.getApplication(), listOf("Start small.", "One task a day.", "Link in bio"))
     }
 
     private val deck = Deck(
         listOf(
-            Slide(top = Frame(uri(1), "Give charity."), bottom = Frame(uri(2), "Tell no one.")),
+            Slide(top = Frame(uri(1), "Start small."), bottom = Frame(uri(2), "One task a day.")),
             Slide(top = Frame(uri(3), "Plan the day."), bottom = Frame()),
             Slide(layout = Layout.Single, top = Frame(uri(4), "Link in bio", textSize = 0.085f, textY = 0.8f)),
         ),
@@ -79,11 +79,6 @@ class ScreenshotTest {
     @Test fun words() {
         compose.setContent { Themed { Editor(part = 0, text = true) } }
         shoot("3-words")
-    }
-
-    @Test fun applyWords() {
-        compose.setContent { Themed { ApplySheet(deck, 0 to 0, {}, {}) } }
-        shoot("4-apply")
     }
 
     @Test fun review() {
