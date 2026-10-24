@@ -16,6 +16,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
@@ -41,13 +42,17 @@ class ScreenshotTest {
             })
             Photos.put(uri(i + 1), bmp)
         }
+        Phrases.save(RuntimeEnvironment.getApplication(), listOf("Give charity.", "Tell no one.", "Link in bio"))
     }
 
-    private val deck = Deck(listOf(
-        Slide(top = Frame(uri(1), "Give charity."), bottom = Frame(uri(2), "Tell no one.")),
-        Slide(top = Frame(uri(3), "Plan the day."), bottom = Frame(uri(4), "Then do it.")),
-        Slide(layout = Layout.Single, top = Frame(uri(2), "Link in bio", textSize = TextSize.Large)),
-    ))
+    private val deck = Deck(
+        listOf(
+            Slide(top = Frame(uri(1), "Give charity."), bottom = Frame(uri(2), "Tell no one.")),
+            Slide(top = Frame(uri(3), "Plan the day."), bottom = Frame()),
+            Slide(layout = Layout.Single, top = Frame(uri(4), "Link in bio", textSize = 0.085f, textY = 0.8f)),
+        ),
+        photos = (1..4).map(::uri),
+    )
 
     @Composable
     private fun Themed(content: @Composable () -> Unit) = BanbanTheme { Surface(content = content) }
@@ -64,8 +69,23 @@ class ScreenshotTest {
         shoot("2-editor")
     }
 
+    @Test fun photoSelected() {
+        compose.setContent { Themed { EditorScreen(deck, {}, {}, { _, _ -> }, startPart = 1) } }
+        shoot("3-photo")
+    }
+
+    @Test fun words() {
+        compose.setContent { Themed { EditorScreen(deck, {}, {}, { _, _ -> }, startPart = 0, startText = true) } }
+        shoot("4-words")
+    }
+
+    @Test fun applyWords() {
+        compose.setContent { Themed { ApplySheet(deck, 0 to 0, {}, {}) } }
+        shoot("5-apply")
+    }
+
     @Test fun saved() {
         compose.setContent { Themed { DoneScreen(3, {}, {}, {}) } }
-        shoot("3-saved")
+        shoot("6-saved")
     }
 }

@@ -32,6 +32,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
@@ -122,7 +130,7 @@ fun HomeScreen(
     onCheckUpdate: () -> Unit,
     onInstall: (Update) -> Unit,
 ) {
-    val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(Deck.MAX_SLIDES * 2)) {
+    val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(Deck.MAX_PHOTOS)) {
         if (it.isNotEmpty()) onPicked(it)
     }
     Column(Modifier.fillMaxSize().background(Tds.White)) {
@@ -134,12 +142,12 @@ fun HomeScreen(
         Column(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Spacer(Modifier.height(16.dp))
             Text(
-                "사진 두 장과 문구 두 줄로\n캐러셀을 만들어요",
+                "사진을 한 번에 고르면\n캐러셀이 바로 만들어져요",
                 fontSize = 26.sp, lineHeight = 34.sp, fontWeight = FontWeight.Bold, color = Tds.Grey900,
                 modifier = Modifier.fillMaxWidth(),
             )
             Text(
-                "고른 순서대로 두 장씩 한 슬라이드가 돼요.",
+                "두 장씩 위아래로 들어가고, 마지막 사진은 꽉 차게 들어가요.",
                 fontSize = 16.sp, color = Tds.Grey600, modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
             )
             Box(Modifier.weight(1f).fillMaxWidth().padding(vertical = 24.dp), contentAlignment = Alignment.Center) {
@@ -166,11 +174,15 @@ private val Sample = Slide(
 // ───────────────────────────── Editor ─────────────────────────────
 
 private enum class Tool { None, Text, Dim }
+private enum class Tray { Photos, Slides }
+
+private fun spotName(slide: Slide, part: Int) = if (slide.layout == Layout.Single) "한 장" else if (part == 0) "위" else "아래"
 
 /**
- * The editor, after SCRL and Unfold: slides side by side to swipe through, and a toolbar that
- * shows only what fits what's selected — the slide, or one photo on it. Tap a photo to select it;
- * then drag to move it and pinch to zoom. Removing never asks first; it can be undone.
+ * The editor, split in two like Shardee and Instagram's Layout: the slides on top, and every picked
+ * photo waiting in a tray underneath. Tap a spot on a slide, then a photo in the tray, and it goes
+ * in; with no spot chosen, the photo fills the next empty one. The toolbar shows only what fits
+ * what's selected. Removing never asks first; it can be undone.
  */
 @Composable
 fun EditorScreen(
@@ -178,14 +190,19 @@ fun EditorScreen(
     onChange: (Deck) -> Unit,
     onClose: () -> Unit,
     onShare: (List<Uri>, Boolean) -> Unit,
+    startPart: Int? = null,
+    startText: Boolean = false,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     val count by rememberUpdatedState(deck.slides.size)
     val pager = rememberPagerState { count }
-    var part by remember { mutableStateOf<Int?>(null) }
-    var tool by remember { mutableStateOf(Tool.None) }
+    var part by remember { mutableStateOf(startPart) }
+    var tool by remember { mutableStateOf(if (startText) Tool.Text else Tool.None) }
+    var tray by remember { mutableStateOf(Tray.Photos) }
+    var applying by remember { mutableStateOf(false) }
+    var phrases by remember { mutableStateOf(Phrases.load(context)) }
     var exporting by remember { mutableStateOf<Int?>(null) }
     var saved by remember { mutableStateOf<List<Uri>?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -193,10 +210,16 @@ fun EditorScreen(
     val slide = deck.slides.getOrNull(page)
     val current by rememberUpdatedState(deck)
 
-    rememberPhotos(deck.slides.flatMap { s -> s.frames.mapNotNull { it.uri } })
-    LaunchedEffect(pager.currentPage) { part = null; tool = Tool.None }
+    rememberPhotos(deck.photos)
+    var settled by remember { mutableStateOf(false) }
+    LaunchedEffect(pager.currentPage) {
+        // Keep a selection made for the screenshots; after that, a new page starts with nothing selected.
+        if (settled) { part = null; tool = Tool.None }
+        settled = true
+    }
     BackHandler {
         when {
+            applying -> applying = false
             tool != Tool.None -> tool = Tool.None
             part != null -> part = null
             else -> onClose()
@@ -206,30 +229,62 @@ fun EditorScreen(
     fun set(i: Int, s: Slide) = onChange(current.copy(slides = current.slides.toMutableList().also { it[i] = s }))
     fun setFrame(f: Frame) { val p = part ?: return; set(page, current.slides[page].with(p, f)) }
     fun goTo(i: Int) = scope.launch { pager.animateScrollToPage(i) }
-
-    val addPhotos = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(Deck.MAX_SLIDES * 2)) { uris ->
-        if (uris.isNotEmpty()) {
-            val room = Deck.MAX_SLIDES - current.slides.size
-            val added = Deck.fromPhotos(uris).take(room)
-            onChange(current.copy(slides = current.slides + added))
-            if (added.isNotEmpty()) scope.launch { pager.scrollToPage(current.slides.size - added.size) }
-        }
+    fun say(message: String, undo: Deck? = null) = scope.launch {
+        snackbar.currentSnackbarData?.dismiss()
+        val r = snackbar.showSnackbar(message, actionLabel = if (undo != null) "되돌리기" else null)
+        if (r == SnackbarResult.ActionPerformed && undo != null) onChange(undo)
     }
-    val replace = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (uri != null) setFrame(current.slides[page].frame(part ?: 0).copy(uri = uri, zoom = 1f, x = 0f, y = 0f))
+
+    /** Puts a tray photo into the chosen spot, or the next empty one, or a new slide. */
+    fun place(uri: Uri) {
+        val d = current
+        val p = part
+        if (p != null) {
+            setFrame(d.slides[page].frame(p).copy(uri = uri, zoom = 1f, x = 0f, y = 0f))
+            return
+        }
+        val spot = d.firstEmpty(page)
+        if (spot != null) {
+            val (i, sp) = spot
+            set(i, d.slides[i].with(sp, d.slides[i].frame(sp).copy(uri = uri)))
+            if (i != page) goTo(i)
+            return
+        }
+        if (d.slides.size >= Deck.MAX_SLIDES) { say("슬라이드는 ${Deck.MAX_SLIDES}장까지 만들 수 있어요"); return }
+        val at = (page + 1).coerceAtMost(d.slides.size)
+        onChange(d.copy(slides = d.slides.toMutableList().also { it.add(at, Slide(top = Frame(uri))) }))
+        goTo(at)
+    }
+
+    val addPhotos = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(Deck.MAX_PHOTOS)) { uris ->
+        if (uris.isNotEmpty()) {
+            val all = (current.photos + uris).distinct()
+            onChange(current.copy(photos = all.take(Deck.MAX_PHOTOS)))
+            tray = Tray.Photos
+            if (all.size > Deck.MAX_PHOTOS) say("사진은 ${Deck.MAX_PHOTOS}장까지 담을 수 있어요")
+        }
     }
 
     fun deleteSlide() {
         val before = current
         part = null
         onChange(current.copy(slides = current.slides.filterIndexed { i, _ -> i != page }))
-        scope.launch {
-            snackbar.currentSnackbarData?.dismiss()
-            if (snackbar.showSnackbar("슬라이드를 지웠어요", actionLabel = "되돌리기") == SnackbarResult.ActionPerformed) onChange(before)
-        }
+        say("슬라이드를 지웠어요", undo = before)
     }
 
     fun export() {
+        val empty = current.firstEmpty()
+        if (empty != null) {
+            // Toss: don't stop with an error; take them to what's missing.
+            scope.launch {
+                pager.animateScrollToPage(empty.first)
+                part = empty.second
+                tool = Tool.None
+                tray = Tray.Photos
+            }
+            say("빈 칸이 있어요. 아래에서 사진을 골라 넣어 주세요")
+            return
+        }
         exporting = 0
         scope.launch {
             runCatching { withContext(Dispatchers.IO) { Art.export(context, current) { n -> scope.launch { exporting = n } } } }
@@ -253,12 +308,12 @@ fun EditorScreen(
                 }
             }
 
-            // ── Slides, side by side with the next one peeking in ──
+            // ── Top half: slides, side by side with the next one peeking in ──
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 if (deck.slides.isEmpty()) {
-                    Text("슬라이드가 없어요.\n아래 ＋로 사진을 더해 주세요.", color = Tds.Grey600, textAlign = TextAlign.Center)
+                    Text("슬라이드가 없어요.\n아래 사진을 누르면 새 슬라이드가 생겨요.", color = Tds.Grey600, textAlign = TextAlign.Center)
                 } else {
-                    BoxWithConstraints(Modifier.fillMaxSize().padding(vertical = 16.dp)) {
+                    BoxWithConstraints(Modifier.fillMaxSize().padding(vertical = 12.dp)) {
                         // Fit a 4:5 slide in the space, then leave the rest at the sides for the neighbours to peek.
                         val slideW = minOf(maxWidth - 48.dp, maxHeight * 0.8f)
                         val side = (maxWidth - slideW) / 2
@@ -270,11 +325,14 @@ fun EditorScreen(
                             modifier = Modifier.fillMaxSize(),
                         ) { i ->
                             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                val mine = i == page
                                 SlideCanvas(
                                     deck.slides[i],
-                                    selectedPart = if (i == page) part else null,
+                                    selectedPart = if (mine) part else null,
                                     modifier = Modifier.width(slideW),
-                                    onTap = { p -> if (i != page) goTo(i) else { part = if (part == p) null else p; tool = Tool.None } },
+                                    guide = mine && part != null,
+                                    moveWords = mine && tool == Tool.Text,
+                                    onTap = { p -> if (!mine) goTo(i) else if (tool != Tool.Text || part != p) { part = if (part == p) null else p; tool = Tool.None } },
                                     onMove = { p, f -> set(i, current.slides[i].with(p, f)) },
                                 )
                             }
@@ -286,31 +344,49 @@ fun EditorScreen(
 
             if (deck.slides.size > 1) Dots(deck.slides.size, page)
 
-            // ── Toolbar for what's selected ──
+            // ── Bottom half: tools for what's selected, then the photo tray ──
             Column(Modifier.fillMaxWidth().background(Tds.White).imePadding()) {
                 HorizontalDivider(color = Tds.Grey200)
                 val p = part
                 if (slide != null && p != null) {
                     val frame = slide.frame(p)
                     when (tool) {
-                        Tool.Text -> TextPanel(frame, { setFrame(it) }) { tool = Tool.None }
+                        Tool.Text -> TextPanel(
+                            frame = frame,
+                            phrases = phrases,
+                            onFrame = { setFrame(it) },
+                            onKeep = { t -> phrases = (listOf(t) + phrases).distinct(); Phrases.save(context, phrases) },
+                            onForget = { t -> phrases = phrases - t; Phrases.save(context, phrases) },
+                            onApply = { applying = true },
+                            onDone = { tool = Tool.None },
+                        )
                         Tool.Dim -> DimPanel(frame, { setFrame(it) }) { tool = Tool.None }
                         Tool.None -> {
                             PanelTitle(
-                                if (slide.layout == Layout.Single) "사진" else if (p == 0) "위 사진" else "아래 사진",
+                                if (slide.layout == Layout.Single) "꽉 찬 사진" else if (p == 0) "위 사진" else "아래 사진",
                                 "끌어서 옮기고, 두 손가락으로 키워요",
                             ) { part = null }
                             ToolRow {
                                 ToolButton("문구", Glyph.Text) { tool = Tool.Text }
-                                ToolButton("사진 바꾸기", Glyph.Photo) { replace.launch(photoPicker()) }
                                 ToolButton("어둡게", Glyph.Dim) { tool = Tool.Dim }
-                                ToolButton("맞춤", Glyph.Fit) { setFrame(frame.copy(zoom = 1f, x = 0f, y = 0f)) }
+                                ToolButton("맞춤", Glyph.Fit, enabled = frame.uri != null) { setFrame(frame.copy(zoom = 1f, x = 0f, y = 0f)) }
+                                ToolButton("비우기", Glyph.Delete, enabled = frame.uri != null) {
+                                    val before = current
+                                    setFrame(frame.copy(uri = null, zoom = 1f, x = 0f, y = 0f))
+                                    say("사진을 뺐어요", undo = before)
+                                }
                             }
+                            TrayHint("아래 사진을 누르면 이 칸에 들어가요")
+                            PhotoTray(deck, onAdd = { addPhotos.launch(photoPicker()) }, onPick = ::place)
                         }
                     }
                 } else {
                     ToolRow {
-                        ToolButton("사진 추가", Glyph.Add, enabled = deck.slides.size < Deck.MAX_SLIDES) { addPhotos.launch(photoPicker()) }
+                        ToolButton("새 슬라이드", Glyph.Add, enabled = deck.slides.size < Deck.MAX_SLIDES) {
+                            val at = (page + 1).coerceAtMost(current.slides.size)
+                            onChange(current.copy(slides = current.slides.toMutableList().also { it.add(at, Slide()) }))
+                            goTo(at)
+                        }
                         if (slide != null) {
                             ToolButton(if (slide.layout == Layout.Halves) "한 장으로" else "두 장으로", if (slide.layout == Layout.Halves) Glyph.Single else Glyph.Halves) {
                                 set(page, slide.copy(layout = if (slide.layout == Layout.Halves) Layout.Single else Layout.Halves))
@@ -328,11 +404,38 @@ fun EditorScreen(
                             ToolButton("삭제", Glyph.Delete) { deleteSlide() }
                         }
                     }
-                    Strip(deck, page, onPick = { goTo(it) })
+                    Segmented(
+                        listOf("사진 ${deck.photos.size}", "슬라이드 ${deck.slides.size}"),
+                        tray.ordinal,
+                        Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    ) { tray = Tray.entries[it] }
+                    when (tray) {
+                        Tray.Photos -> {
+                            TrayHint(if (deck.firstEmpty() != null) "사진을 누르면 빈 칸부터 채워져요" else "칸을 먼저 누르고 사진을 고르면 바꿀 수 있어요")
+                            PhotoTray(deck, onAdd = { addPhotos.launch(photoPicker()) }, onPick = ::place)
+                        }
+                        Tray.Slides -> Strip(deck, page, onPick = { goTo(it) })
+                    }
                 }
             }
         }
 
+        if (applying && slide != null && part != null) {
+            ApplySheet(
+                deck = deck,
+                from = page to (part ?: 0),
+                onApply = { spots ->
+                    val before = current
+                    val src = current.slides[page].frame(part ?: 0)
+                    var slides = current.slides
+                    spots.forEach { (i, sp) -> slides = slides.toMutableList().also { it[i] = it[i].with(sp, it[i].frame(sp).wordsFrom(src)) } }
+                    onChange(current.copy(slides = slides))
+                    applying = false
+                    say("${spots.size}곳에 같은 문구를 넣었어요", undo = before)
+                },
+                onClose = { applying = false },
+            )
+        }
         exporting?.let { n -> ExportingScreen(n, deck.slides.size) }
         saved?.let { uris ->
             DoneScreen(
@@ -355,13 +458,16 @@ fun EditorScreen(
 
 /**
  * One slide, drawn by the same code that saves it. Taps pick the top or bottom photo; with a photo
- * selected, drag and pinch move and zoom it.
+ * selected, drag and pinch move and zoom it, or, with [moveWords], move and resize its words.
+ * [guide] shades the edges Instagram covers with its own buttons.
  */
 @Composable
 fun SlideCanvas(
     slide: Slide,
     selectedPart: Int?,
     modifier: Modifier = Modifier,
+    guide: Boolean = false,
+    moveWords: Boolean = false,
     onTap: (Int) -> Unit = {},
     onMove: (Int, Frame) -> Unit = { _, _ -> },
 ) {
@@ -376,12 +482,25 @@ fun SlideCanvas(
     Canvas(
         modifier.aspectRatio(Deck.WIDTH.toFloat() / Deck.HEIGHT).clip(RoundedCornerShape(4.dp))
             .pointerInput(Unit) { detectTapGestures { tap(partOf(it.y, size.height.toFloat())) } }
-            .pointerInput(selectedPart) {
+            .pointerInput(selectedPart, moveWords) {
                 val p = selectedPart ?: return@pointerInput
                 detectTransformGestures { _, pan, zoom, _ ->
                     val s = latest
                     val f = s.frame(p)
-                    val r = Art.area(s, p, size.width.toFloat(), size.height.toFloat())
+                    val w = size.width.toFloat()
+                    val h = size.height.toFloat()
+                    val r = Art.area(s, p, w, h)
+                    if (moveWords) {
+                        val box = Art.words(s, p, w, h, face)?.second ?: return@detectTransformGestures
+                        // Snap to the middle line, the spot people aim for most.
+                        fun snap(v: Float) = if (kotlin.math.abs(v - 0.5f) < 0.03f) 0.5f else v
+                        move(p, f.copy(
+                            textX = snap(((box.centerX() + pan.x - r.left) / r.width()).coerceIn(0f, 1f)),
+                            textY = snap(((box.centerY() + pan.y - r.top) / r.height()).coerceIn(0f, 1f)),
+                            textSize = (f.textSize * zoom).coerceIn(Frame.TEXT_SIZES),
+                        ))
+                        return@detectTransformGestures
+                    }
                     val bmp = f.uri?.let(Photos::peek) ?: return@detectTransformGestures
                     val z = (f.zoom * zoom).coerceIn(1f, 5f)
                     val scale = maxOf(r.width() / bmp.width, r.height() / bmp.height) * z
@@ -397,19 +516,104 @@ fun SlideCanvas(
     ) {
         @Suppress("UNUSED_EXPRESSION") loaded // redraw when a photo arrives
         drawIntoCanvas { Art.draw(it.nativeCanvas, slide, size.width, size.height, face, Photos::peek) }
+        slide.frames.forEachIndexed { p, f ->
+            if (f.uri == null) {
+                val r = Art.area(slide, p, size.width, size.height)
+                drawGlyph(Glyph.Photo, Color.White.copy(alpha = 0.7f), Offset(r.centerX(), r.centerY()), minOf(r.width(), r.height()) * 0.18f)
+            }
+        }
+        if (guide) {
+            // Instagram's buttons and caption sit here; shade it so photos and words keep clear.
+            val safe = Art.safe(size.width, size.height)
+            val shade = Color.Black.copy(alpha = 0.35f)
+            drawRect(shade, Offset.Zero, Size(size.width, safe.top))
+            drawRect(shade, Offset(0f, safe.bottom), Size(size.width, size.height - safe.bottom))
+            drawRect(shade, Offset(0f, safe.top), Size(safe.left, safe.height()))
+            drawRect(shade, Offset(safe.right, safe.top), Size(size.width - safe.right, safe.height()))
+            drawRect(
+                Color.White.copy(alpha = 0.8f), Offset(safe.left, safe.top), Size(safe.width(), safe.height()),
+                style = Stroke(1.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(6.dp.toPx(), 4.dp.toPx()))),
+            )
+        }
         if (selectedPart != null) {
             val r = Art.area(slide, selectedPart, size.width, size.height)
             val inset = 1.5.dp.toPx()
             drawRect(Tds.Blue500, Offset(r.left + inset, r.top + inset), Size(r.width() - inset * 2, r.height() - inset * 2), style = Stroke(3.dp.toPx()))
+            if (moveWords) Art.words(slide, selectedPart, size.width, size.height, face)?.second?.let { b ->
+                val pad = 6.dp.toPx()
+                drawRoundRect(
+                    Color.White, Offset(b.left - pad, b.top - pad), Size(b.width() + pad * 2, b.height() + pad * 2), CornerRadius(6.dp.toPx()),
+                    style = Stroke(1.5.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(6.dp.toPx(), 4.dp.toPx()))),
+                )
+            }
         }
     }
 }
 
 @Composable
 private fun Dots(count: Int, page: Int) {
-    Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), horizontalArrangement = Arrangement.Center) {
+    Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.Center) {
         repeat(count) { i ->
             Box(Modifier.padding(horizontal = 3.dp).size(6.dp).background(if (i == page) Tds.Blue500 else Tds.Grey300, CircleShape))
+        }
+    }
+}
+
+@Composable
+private fun TrayHint(text: String) {
+    Text(text, fontSize = 13.sp, color = Tds.Grey600, modifier = Modifier.padding(start = 20.dp, top = 4.dp, bottom = 6.dp))
+}
+
+/** Every picked photo, in pick order. A small number says how many spots already use it. */
+@Composable
+private fun PhotoTray(deck: Deck, onAdd: () -> Unit, onPick: (Uri) -> Unit) {
+    val loaded = rememberPhotos(deck.photos)
+    LazyRow(
+        contentPadding = PaddingValues(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+    ) {
+        item {
+            Box(
+                Modifier.size(64.dp).clip(RoundedCornerShape(10.dp)).background(Tds.Grey100).clickable(onClick = onAdd),
+                contentAlignment = Alignment.Center,
+            ) { Canvas(Modifier.size(24.dp)) { drawGlyph(Glyph.Add, Tds.Grey700) } }
+        }
+        items(deck.photos, key = { it.toString() }) { uri ->
+            val uses = deck.uses(uri)
+            Box(Modifier.size(64.dp).clip(RoundedCornerShape(10.dp)).clickable { onPick(uri) }) {
+                Canvas(Modifier.fillMaxSize().background(Tds.Grey200)) {
+                    @Suppress("UNUSED_EXPRESSION") loaded
+                    val bmp = Photos.peek(uri) ?: return@Canvas
+                    // Centre crop to a square.
+                    val side = minOf(bmp.width, bmp.height)
+                    val src = android.graphics.Rect((bmp.width - side) / 2, (bmp.height - side) / 2, (bmp.width + side) / 2, (bmp.height + side) / 2)
+                    drawIntoCanvas { it.nativeCanvas.drawBitmap(bmp, src, android.graphics.RectF(0f, 0f, size.width, size.height), android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG)) }
+                }
+                if (uses > 0) {
+                    Box(
+                        Modifier.align(Alignment.TopEnd).padding(4.dp).size(20.dp).background(Tds.Blue500, CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) { Text("$uses", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White) }
+                }
+            }
+        }
+    }
+}
+
+/** HIG segmented control: grey track, the chosen part raised in white. */
+@Composable
+private fun Segmented(labels: List<String>, chosen: Int, modifier: Modifier = Modifier, onChoose: (Int) -> Unit) {
+    Row(modifier.fillMaxWidth().height(36.dp).clip(RoundedCornerShape(9.dp)).background(Tds.Grey100).padding(2.dp)) {
+        labels.forEachIndexed { i, label ->
+            Box(
+                Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(7.dp))
+                    .background(if (i == chosen) Tds.White else Color.Transparent)
+                    .clickable { onChoose(i) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(label, fontSize = 14.sp, fontWeight = if (i == chosen) FontWeight.Bold else FontWeight.Normal, color = if (i == chosen) Tds.Grey900 else Tds.Grey600)
+            }
         }
     }
 }
@@ -423,12 +627,12 @@ private fun Strip(deck: Deck, page: Int, onPick: (Int) -> Unit) {
         state = list,
         contentPadding = PaddingValues(horizontal = 16.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+        modifier = Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 12.dp),
     ) {
         itemsIndexed(deck.slides, key = { _, s -> s.id }) { i, s ->
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Box(
-                    Modifier.width(44.dp)
+                    Modifier.width(48.dp)
                         .border(if (i == page) 2.dp else 0.dp, if (i == page) Tds.Blue500 else Color.Transparent, RoundedCornerShape(4.dp))
                         .padding(2.dp)
                         .clickable { onPick(i) },
@@ -450,23 +654,141 @@ private fun PanelTitle(title: String, hint: String, onDone: () -> Unit) {
     }
 }
 
+private val Spots = listOf("위" to 0.25f, "가운데" to 0.5f, "아래" to 0.75f)
+
+/**
+ * Words for one photo: type them, or tap a kept line. Size and place can be set here or by hand
+ * on the slide. Kept lines stay for the next carousel too.
+ */
 @Composable
-private fun TextPanel(frame: Frame, onFrame: (Frame) -> Unit, onDone: () -> Unit) {
-    PanelTitle("문구", "사진 가운데에 흰 글씨로 들어가요", onDone)
-    Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        OutlinedTextField(
-            value = frame.text,
-            onValueChange = { onFrame(frame.copy(text = it)) },
-            placeholder = { Text("예: Give charity.") },
-            modifier = Modifier.fillMaxWidth(),
-            maxLines = 3,
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextSize.entries.forEach { s ->
-                Choice(s.label, frame.textSize == s, Modifier.weight(1f)) { onFrame(frame.copy(textSize = s)) }
+private fun TextPanel(
+    frame: Frame,
+    phrases: List<String>,
+    onFrame: (Frame) -> Unit,
+    onKeep: (String) -> Unit,
+    onForget: (String) -> Unit,
+    onApply: () -> Unit,
+    onDone: () -> Unit,
+) {
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { if (frame.text.isEmpty() && phrases.isEmpty()) runCatching { focus.requestFocus() } }
+    val text = frame.text.trim()
+    PanelTitle("문구", "글씨를 끌어서 옮기고, 두 손가락으로 크기를 바꿔요", onDone)
+    Column(Modifier.padding(horizontal = 16.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = frame.text,
+                onValueChange = { onFrame(frame.copy(text = it)) },
+                placeholder = { Text("예: Give charity.") },
+                modifier = Modifier.weight(1f).focusRequester(focus),
+                maxLines = 2,
+            )
+            Spacer(Modifier.width(8.dp))
+            WeakButton("저장", { onKeep(text) }, Modifier.height(56.dp), enabled = text.isNotEmpty() && text !in phrases)
+        }
+        if (phrases.isNotEmpty()) {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(phrases, key = { it }) { t ->
+                    Row(
+                        Modifier.height(36.dp).clip(RoundedCornerShape(18.dp))
+                            .background(if (t == text) Tds.Blue50 else Tds.Grey100),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            t, fontSize = 14.sp, maxLines = 1, color = if (t == text) Tds.Blue700 else Tds.Grey800,
+                            modifier = Modifier.clickable { onFrame(frame.copy(text = t)) }.padding(start = 14.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+                        )
+                        Box(Modifier.size(32.dp).clickable { onForget(t) }, contentAlignment = Alignment.Center) {
+                            Icon(Icons.Filled.Close, "지우기", tint = Tds.Grey500, modifier = Modifier.size(14.dp))
+                        }
+                    }
+                }
             }
         }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("크기", fontSize = 14.sp, color = Tds.Grey700, modifier = Modifier.width(40.dp))
+            Slider(
+                value = frame.textSize,
+                onValueChange = { onFrame(frame.copy(textSize = it)) },
+                valueRange = Frame.TEXT_SIZES,
+                colors = SliderDefaults.colors(thumbColor = Tds.Blue500, activeTrackColor = Tds.Blue500, inactiveTrackColor = Tds.Grey200),
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Spots.forEach { (label, y) ->
+                val chosen = kotlin.math.abs(frame.textY - y) < 0.01f && frame.textX == 0.5f
+                Choice(label, chosen, Modifier.weight(1f)) { onFrame(frame.copy(textX = 0.5f, textY = y)) }
+            }
+        }
+        WeakButton("다른 사진에도 쓰기", onApply, Modifier.fillMaxWidth().height(48.dp), enabled = text.isNotEmpty())
     }
+}
+
+/**
+ * Picks the other photos that should get the same words, size and place. Spots with no words yet
+ * start ticked, since that's usually what's wanted.
+ */
+@Composable
+fun ApplySheet(deck: Deck, from: Pair<Int, Int>, onApply: (List<Pair<Int, Int>>) -> Unit, onClose: () -> Unit) {
+    val spots = remember(deck) {
+        deck.slides.flatMapIndexed { i, s -> s.frames.indices.map { i to it } }.filter { it != from }
+    }
+    var chosen by remember { mutableStateOf(spots.filter { (i, p) -> deck.slides[i].frame(p).text.isBlank() }.toSet()) }
+    val words = deck.slides.getOrNull(from.first)?.frame(from.second)?.text?.trim().orEmpty()
+    Column(Modifier.fillMaxSize().background(Tds.White).clickable(remember { MutableInteractionSource() }, null) {}) {
+        Row(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "닫기", tint = Tds.Grey900) }
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = { chosen = if (chosen.size == spots.size) emptySet() else spots.toSet() }) {
+                Text(if (chosen.size == spots.size) "모두 해제" else "모두 선택", fontSize = 16.sp, color = Tds.Blue700)
+            }
+        }
+        Text("어느 사진에 쓸까요?", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Tds.Grey900, modifier = Modifier.padding(horizontal = 20.dp))
+        Text(
+            "‘$words’를 크기와 위치 그대로 넣어요",
+            fontSize = 15.sp, color = Tds.Grey600, maxLines = 2, modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 12.dp),
+        )
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(3),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.weight(1f),
+        ) {
+            items(spots, key = { "${it.first}-${it.second}" }) { spot ->
+                val (i, p) = spot
+                val s = deck.slides[i]
+                val on = spot in chosen
+                val toggle = { chosen = if (on) chosen - spot else chosen + spot }
+                Column(Modifier.clickable { toggle() }) {
+                    Box {
+                        SlideCanvas(s, selectedPart = if (s.layout == Layout.Halves) p else null, modifier = Modifier.fillMaxWidth(), onTap = { toggle() })
+                        Box(
+                            Modifier.align(Alignment.TopEnd).padding(6.dp).size(24.dp)
+                                .background(if (on) Tds.Blue500 else Color.Black.copy(alpha = 0.25f), CircleShape)
+                                .border(1.5.dp, Color.White, CircleShape),
+                            contentAlignment = Alignment.Center,
+                        ) { if (on) Canvas(Modifier.size(14.dp)) { drawCheck(Color.White) } }
+                    }
+                    Text("${i + 1} · ${spotName(s, p)}", fontSize = 13.sp, color = if (on) Tds.Blue700 else Tds.Grey600, modifier = Modifier.padding(top = 4.dp))
+                }
+            }
+        }
+        Button(
+            onClick = { onApply(spots.filter { it in chosen }) },
+            enabled = chosen.isNotEmpty(),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp).height(CtaHeight),
+        ) { Text(if (chosen.isEmpty()) "사진을 골라 주세요" else "${chosen.size}곳에 쓰기", fontSize = 17.sp, fontWeight = FontWeight.Bold) }
+    }
+}
+
+private fun DrawScope.drawCheck(c: Color) {
+    val w = size.width
+    drawPath(
+        Path().apply { moveTo(0.15f * w, 0.52f * w); lineTo(0.42f * w, 0.78f * w); lineTo(0.88f * w, 0.25f * w) },
+        c, style = Stroke(width = w * 0.16f, cap = StrokeCap.Round, join = StrokeJoin.Round),
+    )
 }
 
 @Composable
@@ -514,8 +836,12 @@ private fun ToolButton(label: String, glyph: Glyph, enabled: Boolean = true, onC
 /** Line icons drawn in code, one stroke weight, so the toolbar reads as one set. */
 private enum class Glyph { Add, Text, Photo, Dim, Fit, Halves, Single, Copy, Left, Right, Delete }
 
-private fun DrawScope.drawGlyph(g: Glyph, c: Color) {
-    val w = size.width
+/** Draws [g] in a square of side [w] centred on [centre], or filling the canvas when not given. */
+private fun DrawScope.drawGlyph(g: Glyph, c: Color, centre: Offset? = null, w: Float = size.width) {
+    if (centre != null) {
+        translate(centre.x - w / 2, centre.y - w / 2) { drawGlyph(g, c, null, w) }
+        return
+    }
     val s = Stroke(width = w * 0.08f, cap = StrokeCap.Round, join = StrokeJoin.Round)
     val r = CornerRadius(w * 0.12f)
     fun box(x: Float, y: Float, bw: Float, bh: Float) = drawRoundRect(c, Offset(x * w, y * w), Size(bw * w, bh * w), r, style = s)

@@ -64,7 +64,7 @@ class MainActivity : ComponentActivity() {
                                 deck = deck,
                                 update = update,
                                 onPicked = { uris ->
-                                    deck = Deck(Deck.fromPhotos(uris).take(Deck.MAX_SLIDES))
+                                    deck = Deck.start(uris)
                                     editing = true
                                 },
                                 onContinue = { editing = true },

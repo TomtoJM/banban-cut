@@ -67,7 +67,7 @@ object Art {
             val bmp = frame.uri?.let(photo)
             if (bmp != null) drawPhoto(canvas, bmp, frame, r) else canvas.drawColor(EMPTY)
             if (frame.dim > 0f) canvas.drawColor(Color.argb((frame.dim * 255).toInt(), 0, 0, 0))
-            if (frame.text.isNotBlank()) drawWords(canvas, frame, r, w, typeface)
+            drawWords(canvas, slide, part, w, h, typeface)
             canvas.restore()
         }
     }
@@ -84,21 +84,47 @@ object Art {
         canvas.drawBitmap(bmp, null, RectF(left, top, left + dw, top + dh), Paint(Paint.FILTER_BITMAP_FLAG))
     }
 
-    private fun drawWords(canvas: Canvas, f: Frame, r: RectF, slideW: Float, typeface: Typeface) {
-        val size = slideW * f.textSize.ofWidth
+    /** Where nothing of Instagram's sits on top of the post. */
+    fun safe(w: Float, h: Float) = RectF(w * Deck.SAFE_SIDE, h * Deck.SAFE_TOP, w * (1 - Deck.SAFE_SIDE), h * (1 - Deck.SAFE_BOTTOM))
+
+    /**
+     * Lays out a frame's words and finds where they go: centred on the frame's chosen spot, then
+     * pushed back inside both the photo's own area and Instagram's safe zone, so a button or the
+     * caption never covers them. Null when there are no words.
+     */
+    fun words(slide: Slide, part: Int, w: Float, h: Float, typeface: Typeface): Pair<StaticLayout, RectF>? {
+        val f = slide.frame(part)
+        if (f.text.isBlank()) return null
+        val r = area(slide, part, w, h)
+        val bounds = RectF(r).apply { if (!intersect(safe(w, h))) set(r) }
+        val size = w * f.textSize
         val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
             this.typeface = typeface
             textSize = size
             color = Color.WHITE
             setShadowLayer(size / 5f, 0f, size / 20f, Color.argb(140, 0, 0, 0))
         }
-        val maxW = (r.width() * 0.84f).toInt()
+        val maxW = bounds.width().toInt().coerceAtLeast(1)
         val layout = StaticLayout.Builder.obtain(f.text, 0, f.text.length, paint, maxW)
             .setAlignment(TextLayout.Alignment.ALIGN_CENTER)
             .setLineSpacing(0f, 1.1f)
             .build()
+        var textW = 0f
+        for (i in 0 until layout.lineCount) textW = maxOf(textW, layout.getLineWidth(i))
+        val bw = textW.coerceAtMost(bounds.width())
+        val bh = layout.height.toFloat()
+        fun place(centre: Float, half: Float, lo: Float, hi: Float) =
+            if (hi - lo <= half * 2) (lo + hi) / 2 else centre.coerceIn(lo + half, hi - half)
+        val cx = place(r.left + f.textX * r.width(), bw / 2, bounds.left, bounds.right)
+        val cy = place(r.top + f.textY * r.height(), bh / 2, bounds.top, bounds.bottom)
+        return layout to RectF(cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2)
+    }
+
+    private fun drawWords(canvas: Canvas, slide: Slide, part: Int, w: Float, h: Float, typeface: Typeface) {
+        val (layout, box) = words(slide, part, w, h, typeface) ?: return
         canvas.save()
-        canvas.translate(r.centerX() - maxW / 2f, r.centerY() - layout.height / 2f)
+        // The layout is as wide as the bounds; slide it so its centred lines sit over the box.
+        canvas.translate(box.centerX() - layout.width / 2f, box.top)
         layout.draw(canvas)
         canvas.restore()
     }
