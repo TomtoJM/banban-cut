@@ -8,6 +8,7 @@ import android.graphics.Typeface
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import androidx.annotation.OptIn
+import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.OverlaySettings
@@ -89,7 +90,7 @@ object Video {
     private fun item(slide: Slide, part: Int, f: Frame, size: android.util.Size, ms: Long, alone: Boolean): EditedMediaItem {
         val r = Art.area(slide, part, WIDTH.toFloat(), HEIGHT.toFloat())
         val v = Art.visible(size.width, size.height, f, r)
-        val effects = mutableListOf(
+        val effects = mutableListOf<Effect>(
             Crop(-1 + 2 * v.left, -1 + 2 * v.right, 1 - 2 * v.bottom, 1 - 2 * v.top),
             Presentation.createForWidthAndHeight(r.width().toInt(), r.height().toInt(), Presentation.LAYOUT_STRETCH_TO_FIT),
         )

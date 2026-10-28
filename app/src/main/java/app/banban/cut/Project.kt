@@ -80,11 +80,11 @@ data class Slide(
      */
     val clipMs: Long? get() = frames.filter { it.isVideo }.minOfOrNull { it.durationMs }?.coerceAtMost(MAX_CLIP_MS)
 
-    companion object {
-        const val MAX_CLIP_MS = 60_000L
-
     fun toJson(): JSONObject = JSONObject().put("id", id).put("layout", layout.name)
         .put("top", top.toJson()).put("bottom", bottom.toJson())
+
+    companion object {
+        const val MAX_CLIP_MS = 60_000L
 
         fun fromJson(o: JSONObject) = Slide(
             id = o.optString("id").ifEmpty { UUID.randomUUID().toString() },
