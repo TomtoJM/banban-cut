@@ -113,7 +113,7 @@ jobs:
           arch: x86_64
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           script: |
-            ./gradlew --no-daemon connectedDebugAndroidTest || touch failed
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true || touch failed
             mkdir -p videocheck
             for f in 1-video-photo 2-photo-video 3-two-videos 4-full-video; do adb exec-out run-as app.banban.cut cat files/videocheck/$f.png > videocheck/$f.png || true; adb exec-out run-as app.banban.cut cat files/videocheck/$f.mp4 > videocheck/$f.mp4 || true; done
             adb logcat -d | grep -E "VIDEOCHECK|ExportException|Transformer|AndroidRuntime|TestRunner" | tail -120 || true
