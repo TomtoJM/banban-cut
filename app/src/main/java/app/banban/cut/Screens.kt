@@ -150,7 +150,7 @@ private enum class Tool { None, Text, Dim }
 private fun Deck.spots() = slides.flatMapIndexed { i, s -> s.frames.indices.map { i to it } }
 
 /** A fresh slide, starting with the look last chosen for words and darkening. */
-private fun newSlide(style: Frame) = style.copy(uri = null, text = "", zoom = 1f, x = 0f, y = 0f).let { Slide(top = it, bottom = it) }
+private fun newSlide(style: Frame) = style.emptied().copy(text = "").let { Slide(top = it, bottom = it) }
 
 /**
  * The whole app on one screen, like Instagram's own post editor: the slides on top and the phone's
@@ -229,7 +229,7 @@ fun EditorScreen(
         if (r == SnackbarResult.ActionPerformed && undo != null) onChange(undo)
     }
     fun addSlide(first: Uri? = null) {
-        val s = newSlide(LastStyle.load(context)).let { if (first != null) it.with(0, it.top.copy(uri = first)) else it }
+        val s = newSlide(LastStyle.load(context)).let { if (first != null) it.with(0, it.top.copy(uri = first, durationMs = Gallery.durationMs(context, first))) else it }
         change(current.copy(slides = current.slides + s))
         goTo(current.slides.size)
     }
@@ -241,11 +241,11 @@ fun EditorScreen(
     fun pick(uri: Uri) {
         val d = current
         if (d.uses(uri) > 0) {
-            fun out(f: Frame) = if (f.uri == uri) f.copy(uri = null, zoom = 1f, x = 0f, y = 0f) else f
+            fun out(f: Frame) = if (f.uri == uri) f.emptied() else f
             change(d.copy(slides = d.slides.map { it.copy(top = out(it.top), bottom = out(it.bottom)) }))
             return
         }
-        fun put(i: Int, p: Int) = set(i, current.slides[i].with(p, current.slides[i].frame(p).copy(uri = uri, zoom = 1f, x = 0f, y = 0f)))
+        fun put(i: Int, p: Int) = set(i, current.slides[i].with(p, current.slides[i].frame(p).copy(uri = uri, zoom = 1f, x = 0f, y = 0f, durationMs = Gallery.durationMs(context, uri))))
         val pg = pager.currentPage
         val s = d.slides.getOrNull(pg)
         // A chosen empty spot wins; otherwise the earliest gap, so a photo taken out by mistake goes back where it was.
@@ -281,7 +281,7 @@ fun EditorScreen(
         val to = spots.getOrNull(from + by) ?: return
         val a = current.slides[page].frame(p)
         val b = current.slides[to.first].frame(to.second)
-        fun photoOf(src: Frame, into: Frame) = into.copy(uri = src.uri, zoom = src.zoom, x = src.x, y = src.y, dim = src.dim)
+        fun photoOf(src: Frame, into: Frame) = into.copy(uri = src.uri, zoom = src.zoom, x = src.x, y = src.y, dim = src.dim, durationMs = src.durationMs)
         val slides = current.slides.toMutableList()
         slides[page] = slides[page].with(p, photoOf(b, a))
         slides[to.first] = slides[to.first].with(to.second, photoOf(a, slides[to.first].frame(to.second)))
@@ -330,7 +330,7 @@ fun EditorScreen(
         scope.launch {
             runCatching { withContext(Dispatchers.IO) { Art.export(context, current) { n -> scope.launch { exporting = n } } } }
                 .onSuccess { saved = it; reviewing = false }
-                .onFailure { error = "사진을 내려받지 못했어요. 저장 공간을 확인하고 다시 해 주세요." }
+                .onFailure { error = if (current.slides.any { it.clipMs != null }) "내려받지 못했어요. 저장 공간을 확인하고 다시 해 주세요. 계속 안 되면 다른 동영상으로 해 주세요." else "사진을 내려받지 못했어요. 저장 공간을 확인하고 다시 해 주세요." }
             exporting = null
         }
     }
@@ -411,7 +411,7 @@ fun EditorScreen(
                                         Modifier.offset(y = if (p == 0) 0.dp else slideH / 2),
                                     ) {
                                         if (part == p) part = null
-                                        set(i, current.slides[i].with(p, f.copy(uri = null, zoom = 1f, x = 0f, y = 0f)))
+                                        set(i, current.slides[i].with(p, f.emptied()))
                                     }
                                 }
                             }
@@ -490,7 +490,7 @@ fun EditorScreen(
         }
 
         if (reviewing) SaveSheet(deck, tidied, onDownload = ::download, onClose = { reviewing = false })
-        exporting?.let { n -> ExportingScreen(n, deck.slides.size) }
+        exporting?.let { n -> ExportingScreen(n, deck.slides.size, deck.slides.any { it.clipMs != null }) }
         saved?.let { uris ->
             DoneScreen(
                 count = uris.size,
@@ -571,19 +571,24 @@ private fun GalleryGrid(deck: Deck, sample: List<Uri>?, onPick: (Uri) -> Unit, m
 
     if (access == Gallery.Access.None) {
         Column(modifier.fillMaxWidth().padding(horizontal = 24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-            Text("갤러리 사진을 여기서 바로 넣어요", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = Tds.Grey900)
-            Text("사진을 보려면 접근을 허용해 주세요", fontSize = 14.sp, color = Tds.Grey600, modifier = Modifier.padding(top = 4.dp, bottom = 16.dp))
+            Text("갤러리 사진과 동영상을 여기서 바로 넣어요", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = Tds.Grey900)
+            Text("보려면 접근을 허용해 주세요", fontSize = 14.sp, color = Tds.Grey600, modifier = Modifier.padding(top = 4.dp, bottom = 16.dp))
             Button(onClick = { ask.launch(Gallery.permissions) }, modifier = Modifier.fillMaxWidth().height(52.dp)) {
-                Text("사진 접근 허용", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                Text("사진·동영상 접근 허용", fontSize = 16.sp, fontWeight = FontWeight.Bold)
             }
         }
         return
     }
     Column(modifier.fillMaxWidth()) {
-        if (access == Gallery.Access.Some) {
+        if (access == Gallery.Access.Some || access == Gallery.Access.PhotosOnly) {
             Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("고른 사진만 보여요", fontSize = 13.sp, color = Tds.Grey600, modifier = Modifier.weight(1f))
-                TextButton(onClick = { ask.launch(Gallery.permissions) }) { Text("사진 더 고르기", fontSize = 14.sp, color = Tds.Blue700) }
+                Text(
+                    if (access == Gallery.Access.Some) "고른 사진과 동영상만 보여요" else "동영상도 넣으려면 접근을 허용해 주세요",
+                    fontSize = 13.sp, color = Tds.Grey600, modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = { ask.launch(Gallery.permissions) }) {
+                    Text(if (access == Gallery.Access.Some) "더 고르기" else "허용", fontSize = 14.sp, color = Tds.Blue700)
+                }
             }
         }
         LazyVerticalGrid(
@@ -594,12 +599,15 @@ private fun GalleryGrid(deck: Deck, sample: List<Uri>?, onPick: (Uri) -> Unit, m
         ) {
             itemsIndexed(photos, key = { _, it -> it.toString() }) { i, uri ->
                 val used = deck.uses(uri) > 0
+                val video = if (Gallery.isVideo(uri)) Gallery.durationMs(context, uri) else 0L
                 val thumb by produceState(Gallery.peek(uri), uri) {
                     if (value == null) value = withContext(Dispatchers.IO) { Gallery.thumb(context, uri) }
                 }
                 Box(
                     Modifier.aspectRatio(1f).background(Tds.Grey100).clickable { onPick(uri) }
-                        .semantics { contentDescription = "갤러리 ${i + 1}번째 사진" + if (used) ", 넣음, 누르면 빠져요" else "" },
+                        .semantics {
+                            contentDescription = "갤러리 ${i + 1}번째 " + (if (video > 0) "동영상 ${clock(video)}" else "사진") + if (used) ", 넣음, 누르면 빠져요" else ""
+                        },
                 ) {
                     Canvas(Modifier.fillMaxSize()) {
                         val bmp = thumb ?: return@Canvas
@@ -615,6 +623,13 @@ private fun GalleryGrid(deck: Deck, sample: List<Uri>?, onPick: (Uri) -> Unit, m
                         Modifier.align(Alignment.TopEnd).padding(6.dp).size(22.dp).background(Tds.Blue500, CircleShape).border(1.5.dp, Color.White, CircleShape),
                         contentAlignment = Alignment.Center,
                     ) { Canvas(Modifier.size(12.dp)) { drawCheck(Color.White) } }
+                    // Videos carry their length bottom right, as in the Photos app.
+                    if (video > 0) Text(
+                        clock(video),
+                        fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.White,
+                        style = androidx.compose.ui.text.TextStyle(shadow = androidx.compose.ui.graphics.Shadow(Color.Black.copy(alpha = 0.6f), blurRadius = 4f)),
+                        modifier = Modifier.align(Alignment.BottomEnd).padding(end = 6.dp, bottom = 4.dp),
+                    )
                 }
             }
         }
@@ -714,7 +729,7 @@ fun SlideCanvas(
             },
     ) {
         @Suppress("UNUSED_EXPRESSION") loaded // redraw when a photo arrives
-        drawIntoCanvas { Art.draw(it.nativeCanvas, slide, size.width, size.height, face, Photos::peek) }
+        drawIntoCanvas { Art.draw(it.nativeCanvas, slide, size.width, size.height, face, photo = Photos::peek) }
         slide.frames.forEachIndexed { p, f ->
             if (f.uri == null) {
                 // An empty spot reads as "put a photo here".
@@ -722,7 +737,7 @@ fun SlideCanvas(
                 val d = minOf(r.width(), r.height()) * 0.22f
                 drawCircle(Color.White.copy(alpha = 0.16f), d * 0.75f, Offset(r.centerX(), r.centerY()))
                 drawGlyph(Glyph.Add, Color.White.copy(alpha = 0.85f), Offset(r.centerX(), r.centerY()), d * 0.6f)
-            }
+            } else if (f.isVideo) drawVideoBadge(Art.area(slide, p, size.width, size.height), f.durationMs, slide.clipMs ?: f.durationMs)
         }
         if (guide) {
             // Instagram's buttons and caption sit here; shade it so photos and words keep clear.
@@ -754,6 +769,30 @@ fun SlideCanvas(
             }
         }
     }
+}
+
+/**
+ * Marks a video bottom right of its spot with a play sign and how long it plays, the way the
+ * Photos app marks videos. When the slide cuts it short (the shorter clip, or Instagram's minute),
+ * it says so: "앞 0:08만".
+ */
+private fun DrawScope.drawVideoBadge(r: RectF, durationMs: Long, playsMs: Long) {
+    val label = if (playsMs < durationMs - 500) "앞 ${clock(playsMs)}만" else clock(durationMs)
+    val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.WHITE
+        textSize = 11.dp.toPx()
+        typeface = android.graphics.Typeface.DEFAULT_BOLD
+    }
+    val pad = 6.dp.toPx()
+    val icon = 7.dp.toPx()
+    val w = pad + icon + 4.dp.toPx() + paint.measureText(label) + pad
+    val h = 20.dp.toPx()
+    val left = r.right - 6.dp.toPx() - w
+    val top = r.bottom - 6.dp.toPx() - h
+    drawRoundRect(Color.Black.copy(alpha = 0.55f), Offset(left, top), Size(w, h), CornerRadius(h / 2))
+    val cy = top + h / 2
+    drawPath(Path().apply { moveTo(left + pad, cy - icon / 2); lineTo(left + pad + icon, cy); lineTo(left + pad, cy + icon / 2); close() }, Color.White)
+    drawIntoCanvas { it.nativeCanvas.drawText(label, left + pad + icon + 4.dp.toPx(), cy - (paint.ascent() + paint.descent()) / 2, paint) }
 }
 
 @Composable
@@ -1043,13 +1082,15 @@ private fun DrawScope.drawGlyph(g: Glyph, c: Color, centre: Offset? = null, w: F
 // ───────────────────────────── Saving ─────────────────────────────
 
 @Composable
-private fun ExportingScreen(done: Int, total: Int) {
+private fun ExportingScreen(done: Int, total: Int, video: Boolean) {
     Column(
         Modifier.fillMaxSize().background(Tds.White).clickable(remember { MutableInteractionSource() }, null) {}.padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Text("사진을 만들고 있어요", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Tds.Grey900)
+        Text(if (video) "사진과 동영상을 만들고 있어요" else "사진을 만들고 있어요", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Tds.Grey900)
+        // Encoding a video takes a while; say so, so a slow bar doesn't look stuck.
+        if (video) Text("동영상은 길이만큼 시간이 걸려요. 앱을 켜 둔 채로 기다려 주세요", fontSize = 14.sp, color = Tds.Grey600, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
         Text("$done / $total", fontSize = 40.sp, fontWeight = FontWeight.Bold, color = Tds.Blue700, modifier = Modifier.padding(vertical = 16.dp))
         LinearProgressIndicator(
             progress = { if (total == 0) 0f else done / total.toFloat() }, color = Tds.Blue500, trackColor = Tds.Grey200,

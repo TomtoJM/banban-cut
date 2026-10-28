@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.ImageDecoder
+import android.media.MediaMetadataRetriever
 import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
@@ -30,6 +31,7 @@ object Photos {
 
     /** Call off the main thread. */
     fun load(context: Context, uri: Uri): Bitmap? = peek(uri) ?: runCatching {
+        if (Gallery.isVideo(uri) || context.contentResolver.getType(uri)?.startsWith("video/") == true) return@runCatching poster(context, uri)
         val src = ImageDecoder.createSource(context.contentResolver, uri)
         ImageDecoder.decodeBitmap(src) { decoder, info, _ ->
             val s = info.size
@@ -40,6 +42,16 @@ object Photos {
     }.getOrNull()?.also { put(uri, it) }
 
     fun put(uri: Uri, bitmap: Bitmap) { cache.put(uri.toString(), bitmap) }
+
+    /** A video's opening frame, upright, standing in for it on the slide and in the editor. */
+    private fun poster(context: Context, uri: Uri): Bitmap? {
+        val r = MediaMetadataRetriever()
+        return try {
+            r.setDataSource(context, uri)
+            r.getScaledFrameAtTime(0L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, MAX_SIDE, MAX_SIDE)
+                ?.let { if (it.config == Bitmap.Config.HARDWARE) it.copy(Bitmap.Config.ARGB_8888, false) else it }
+        } finally { r.release() }
+    }
 }
 
 /**
@@ -59,17 +71,34 @@ object Art {
         if (slide.layout == Layout.Single) RectF(0f, 0f, w, h)
         else if (part == 0) RectF(0f, 0f, w, h / 2) else RectF(0f, h / 2, w, h)
 
-    fun draw(canvas: Canvas, slide: Slide, w: Float, h: Float, typeface: Typeface, photo: (Uri) -> Bitmap?) {
+    /**
+     * With [overVideo], a video's spot is left clear (only its darkening and words are drawn), so
+     * the picture can sit on top of the moving video when a slide is saved as a video.
+     */
+    fun draw(canvas: Canvas, slide: Slide, w: Float, h: Float, typeface: Typeface, overVideo: Boolean = false, photo: (Uri) -> Bitmap?) {
         slide.frames.forEachIndexed { part, frame ->
             val r = area(slide, part, w, h)
             canvas.save()
             canvas.clipRect(r)
-            val bmp = frame.uri?.let(photo)
-            if (bmp != null) drawPhoto(canvas, bmp, frame, r) else canvas.drawColor(EMPTY)
+            val bmp = if (overVideo && frame.isVideo) null else frame.uri?.let(photo)
+            if (bmp != null) drawPhoto(canvas, bmp, frame, r) else if (!(overVideo && frame.isVideo)) canvas.drawColor(EMPTY)
             if (frame.dim > 0f) canvas.drawColor(Color.argb((frame.dim * 255).toInt(), 0, 0, 0))
             drawWords(canvas, slide, part, w, h, typeface)
             canvas.restore()
         }
+    }
+
+    /**
+     * The part of a picture of [width]×[height] that shows in [r] once the frame's zoom and
+     * position are applied, as fractions of the picture: left, top, right, bottom in 0..1.
+     */
+    fun visible(width: Int, height: Int, f: Frame, r: RectF): RectF {
+        val scale = maxOf(r.width() / width, r.height() / height) * f.zoom.coerceAtLeast(1f)
+        val dw = width * scale
+        val dh = height * scale
+        val left = ((dw - r.width()) / 2) * (1 - f.x.coerceIn(-1f, 1f)) / dw
+        val top = ((dh - r.height()) / 2) * (1 - f.y.coerceIn(-1f, 1f)) / dh
+        return RectF(left, top, left + r.width() / dw, top + r.height() / dh)
     }
 
     /** Covers the area with the photo, then applies the frame's zoom and position. */
@@ -131,26 +160,41 @@ object Art {
 
     private val EMPTY = Color.rgb(0x33, 0x3D, 0x4B)
 
-    /** Renders every slide at full size and saves them in order to Pictures/BanbanCut. Call off the main thread. */
-    fun export(context: Context, deck: Deck, onProgress: (Int) -> Unit): List<Uri> {
+    /**
+     * Renders every slide and saves them in order: photo slides as JPEGs in Pictures/BanbanCut,
+     * slides with a video as MP4s in Movies/BanbanCut. Each gets a taken-time a second apart, so
+     * the gallery and Instagram's picker list them in carousel order. Call off the main thread.
+     */
+    suspend fun export(context: Context, deck: Deck, onProgress: (Int) -> Unit): List<Uri> {
         val face = typeface(context)
-        val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+        val now = System.currentTimeMillis()
+        val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date(now))
         return deck.slides.mapIndexed { i, slide ->
-            val bmp = Bitmap.createBitmap(Deck.WIDTH, Deck.HEIGHT, Bitmap.Config.ARGB_8888)
-            draw(Canvas(bmp), slide, Deck.WIDTH.toFloat(), Deck.HEIGHT.toFloat(), face) { Photos.load(context, it) }
-            val uri = save(context, bmp, "banban-$stamp-${"%02d".format(i + 1)}.jpg")
-            bmp.recycle()
+            val name = "banban-$stamp-${"%02d".format(i + 1)}"
+            val taken = now + i * 1000L
+            val uri = if (slide.clipMs != null) {
+                val file = java.io.File(context.cacheDir, "$name.mp4")
+                try {
+                    Video.export(context, slide, face, file)
+                    saveVideo(context, file, "$name.mp4", taken)
+                } finally { file.delete() }
+            } else {
+                val bmp = Bitmap.createBitmap(Deck.WIDTH, Deck.HEIGHT, Bitmap.Config.ARGB_8888)
+                draw(Canvas(bmp), slide, Deck.WIDTH.toFloat(), Deck.HEIGHT.toFloat(), face) { Photos.load(context, it) }
+                save(context, bmp, "$name.jpg", taken).also { bmp.recycle() }
+            }
             onProgress(i + 1)
             uri
         }
     }
 
-    private fun save(context: Context, bmp: Bitmap, name: String): Uri {
+    private fun save(context: Context, bmp: Bitmap, name: String, taken: Long): Uri {
         val resolver = context.contentResolver
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, name)
             put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
             put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/BanbanCut")
+            put(MediaStore.MediaColumns.DATE_TAKEN, taken)
             put(MediaStore.Images.Media.IS_PENDING, 1)
         }
         val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: error("insert failed")
@@ -161,4 +205,20 @@ object Art {
         return uri
     }
 
+    private fun saveVideo(context: Context, file: java.io.File, name: String, taken: Long): Uri {
+        val resolver = context.contentResolver
+        val values = ContentValues().apply {
+            put(MediaStore.Video.Media.DISPLAY_NAME, name)
+            put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+            put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/BanbanCut")
+            put(MediaStore.MediaColumns.DATE_TAKEN, taken)
+            put(MediaStore.Video.Media.IS_PENDING, 1)
+        }
+        val uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values) ?: error("insert failed")
+        resolver.openOutputStream(uri)!!.use { out -> file.inputStream().use { it.copyTo(out) } }
+        values.clear()
+        values.put(MediaStore.Video.Media.IS_PENDING, 0)
+        resolver.update(uri, values, null, null)
+        return uri
+    }
 }

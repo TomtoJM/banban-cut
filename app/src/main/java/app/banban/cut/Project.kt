@@ -23,12 +23,20 @@ data class Frame(
     /** Centre of the words inside this photo's area, 0..1 on each axis. */
     val textX: Float = 0.5f,
     val textY: Float = 0.5f,
+    /** How long the clip is when [uri] is a video; 0 for a photo. */
+    val durationMs: Long = 0L,
 ) {
+    val isVideo get() = durationMs > 0
+
+    /** The spot with its photo or video taken out; the words stay. */
+    fun emptied() = copy(uri = null, zoom = 1f, x = 0f, y = 0f, durationMs = 0L)
+
     fun toJson(): JSONObject = JSONObject()
         .put("uri", uri?.toString()).put("text", text)
         .put("zoom", zoom.toDouble()).put("x", x.toDouble()).put("y", y.toDouble())
         .put("dim", dim.toDouble()).put("size", textSize.toDouble())
         .put("textX", textX.toDouble()).put("textY", textY.toDouble())
+        .put("video", durationMs)
 
     companion object {
         const val TEXT_SIZE = 0.065f
@@ -46,6 +54,7 @@ data class Frame(
                 else when (o.optString("textSize")) { "Small" -> 0.05f; "Large" -> 0.085f; else -> TEXT_SIZE },
             textX = o.optDouble("textX", 0.5).toFloat(),
             textY = o.optDouble("textY", 0.5).toFloat(),
+            durationMs = o.optLong("video", 0L),
         )
     }
 }
@@ -65,10 +74,18 @@ data class Slide(
     fun with(part: Int, f: Frame) = if (part == 0) copy(top = f) else copy(bottom = f)
     fun frame(part: Int) = if (part == 0) top else bottom
 
+    /**
+     * How long this slide plays when it has a video: the shortest clip on it, so neither half
+     * runs out early, and at most a minute, Instagram's limit for a carousel video. Null for photos.
+     */
+    val clipMs: Long? get() = frames.filter { it.isVideo }.minOfOrNull { it.durationMs }?.coerceAtMost(MAX_CLIP_MS)
+
+    companion object {
+        const val MAX_CLIP_MS = 60_000L
+
     fun toJson(): JSONObject = JSONObject().put("id", id).put("layout", layout.name)
         .put("top", top.toJson()).put("bottom", bottom.toJson())
 
-    companion object {
         fun fromJson(o: JSONObject) = Slide(
             id = o.optString("id").ifEmpty { UUID.randomUUID().toString() },
             layout = runCatching { Layout.valueOf(o.optString("layout")) }.getOrDefault(Layout.Halves),

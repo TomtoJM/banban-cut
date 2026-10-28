@@ -45,13 +45,15 @@ class ScreenshotTest {
             })
             Photos.put(uri(i + 1), bmp)
         }
+        // One stand-in is a video, so its length badge shows in the gallery and on the slide.
+        Gallery.noteVideo(uri(3), 12_000)
         Phrases.save(RuntimeEnvironment.getApplication(), listOf("Start small.", "One task a day.", "Link in bio"))
     }
 
     private val deck = Deck(
         listOf(
             Slide(top = Frame(uri(1), "Start small."), bottom = Frame(uri(2), "One task a day.")),
-            Slide(top = Frame(uri(3), "Plan the day."), bottom = Frame()),
+            Slide(top = Frame(uri(3), "Plan the day.", durationMs = 12_000), bottom = Frame()),
             Slide(layout = Layout.Single, top = Frame(uri(4), "Link in bio", textSize = 0.085f, textY = 0.8f)),
         ),
         photos = (1..4).map(::uri),
@@ -112,7 +114,7 @@ class ScreenshotTest {
         File("build/screens").mkdirs()
         sample.slides.forEachIndexed { i, slide ->
             val bmp = Bitmap.createBitmap(Deck.WIDTH, Deck.HEIGHT, Bitmap.Config.ARGB_8888)
-            Art.draw(Canvas(bmp), slide, Deck.WIDTH.toFloat(), Deck.HEIGHT.toFloat(), face, Photos::peek)
+            Art.draw(Canvas(bmp), slide, Deck.WIDTH.toFloat(), Deck.HEIGHT.toFloat(), face, photo = Photos::peek)
             File("build/screens/carousel-${i + 1}.png").outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
         }
     }

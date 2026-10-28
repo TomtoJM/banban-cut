@@ -18,6 +18,7 @@ android {
         versionCode = buildNumber
         versionName = "0.1.$buildNumber"
         buildConfigField("String", "REPO", "\"TomtoJM/banban-cut\"")
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
@@ -67,6 +68,10 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-core")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    // Saving slides that hold a video: crop, place and overlay on the GPU, then encode.
+    implementation("androidx.media3:media3-transformer:1.8.0")
+    implementation("androidx.media3:media3-effect:1.8.0")
+    implementation("androidx.media3:media3-common:1.8.0")
 
     // Screenshots of the screens, rendered on CI (see ScreenshotTest).
     testImplementation("junit:junit:4.13.2")
@@ -75,4 +80,9 @@ dependencies {
     testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:1.32.2")
     testImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+
+    // Saving real videos on an emulator (see VideoExportTest); needs the phone's GPU and encoder.
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:core:1.6.1")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }
