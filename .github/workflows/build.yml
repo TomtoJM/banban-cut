@@ -125,6 +125,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           ls -la videocheck || exit 0
-          find videocheck -size 0 -delete
+          find videocheck -size -2k -delete
           gh release view video-check >/dev/null 2>&1 || gh release create video-check --prerelease --title "video check" --notes "Frames from the latest emulator run of VideoExportTest."
           gh release upload video-check videocheck/* --clobber || true
