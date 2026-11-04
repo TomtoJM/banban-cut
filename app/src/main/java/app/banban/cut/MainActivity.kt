@@ -62,7 +62,7 @@ class MainActivity : ComponentActivity() {
                             onOpenSecurity = ::openSecurity,
                             onSave = { Deck.save(ctx, it) },
                             onOpenGallery = ::openGallery,
-                            onNew = { deck = Deck().orBlank(ctx) },
+                            onNew = { deck = Deck().orBlank(ctx); Deck.save(ctx, deck) },
                         )
                     }
                 }
