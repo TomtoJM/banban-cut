@@ -8,7 +8,7 @@ import android.provider.MediaStore
 /**
  * The check videos Atomic ToDoList saves when a todo is ticked: 1080×675 MP4s (exactly one
  * banban-cut spot) in DCIM/Atomic ToDoList/, oldest first is the order they were ticked, and
- * each one's MediaStore TITLE is the todo's name. See docs/CHECK_CLIPS.md for the agreement.
+ * each one's MediaStore TITLE (from the title inside the MP4) or file name is the todo's name. See docs/CHECK_CLIPS.md for the agreement.
  */
 data class CheckClip(val uri: Uri, val title: String, val durationMs: Long, val key: String)
 
@@ -40,13 +40,22 @@ object Checks {
                     if (key in used || uri in skip) continue
                     val ms = c.getLong(4).coerceAtLeast(1L)
                     Gallery.noteVideo(uri, ms)
-                    // The todo's name; a file name only if the app couldn't set one.
-                    val title = c.getString(1)?.takeIf { it.isNotBlank() } ?: name.substringBeforeLast('.')
-                    add(CheckClip(uri, title, ms, key))
+                    add(CheckClip(uri, title(c.getString(1), name), ms, key))
                 }
             }
         } ?: emptyList()
     }.getOrDefault(emptyList())
+
+    /**
+     * The todo's name. Android fills TITLE from the title inside the MP4 when it scans the file,
+     * and from the file name when there isn't one (a TITLE set by the saving app is lost on
+     * Android 15). So: TITLE when it's a real name, else the file name up to "__", which is how
+     * Atomic ToDoList names files as a fallback ("Research 5 companies__20261104-101500.mp4").
+     */
+    fun title(title: String?, displayName: String): String {
+        val stem = displayName.substringBeforeLast('.')
+        return title?.trim()?.takeIf { it.isNotEmpty() && it != stem } ?: stem.substringBefore("__").trim().ifEmpty { stem }
+    }
 
     /**
      * Remembers check videos that went into a saved carousel, by file name and size, so they

@@ -61,12 +61,13 @@ class CheckClipsTest {
         // be lost on Android 15 (the scan sets TITLE from the file); this shows which survive.
         val a = save("check_a.mp4", "Research 5 companies", asset = "check_titled.mp4")
         val b = save("check_b.mp4", "Write the cover letter", after = true)
-        val c = save("check_c.mp4", "Go for a run")
+        val c = save("Go for a run__20261104-101500.mp4", "Go for a run")
         Thread.sleep(3_000) // let any late scan finish
         val all = Checks.find(app)
         println("CHECKS API ${Build.VERSION.SDK_INT} in-mp4=${all[0].title} | set-after=${all[1].title} | insert-only=${all[2].title}")
         assertEquals(listOf(a, b, c), all.map { it.uri })
         assertEquals("name inside the MP4", "Research 5 companies", all[0].title)
+        assertEquals("name in the file name", "Go for a run", all[2].title)
         made.remove(c); app.contentResolver.delete(c, null, null)
         val found = Checks.find(app)
         println("CHECKS found: " + found.joinToString { "${it.title} ${it.durationMs}ms ${it.key}" })
