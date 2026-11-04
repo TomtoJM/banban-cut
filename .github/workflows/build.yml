@@ -66,6 +66,16 @@ jobs:
             shots/*.png
             shots/*.txt
 
+      # Branch builds share their screens on a "preview" pre-release (no app), to look at before merging.
+      - name: Share preview screens
+        if: github.event_name != 'pull_request' && github.ref != 'refs/heads/main'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view preview >/dev/null 2>&1 || gh release create preview --prerelease --title "preview" --notes "Screens from the latest branch build."
+          gh release upload preview $(ls shots/*.png shots/*.txt 2>/dev/null) --clobber
+
       # Only signed builds from main become a release; the app checks the latest one for updates.
       - name: Publish release
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && env.HAS_KEY == 'true'
