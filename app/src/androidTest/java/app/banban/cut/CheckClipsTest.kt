@@ -24,7 +24,11 @@ class CheckClipsTest {
     private val app = InstrumentationRegistry.getInstrumentation().targetContext
     private val made = mutableListOf<Uri>()
 
-    private fun save(name: String, title: String): Uri {
+    /**
+     * [asset] is the MP4 to copy in; [after] sets TITLE again once the file is published, for
+     * the way where the name isn't inside the MP4.
+     */
+    private fun save(name: String, title: String, asset: String = "check.mp4", after: Boolean = false): Uri {
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, name)
             put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
@@ -35,9 +39,13 @@ class CheckClipsTest {
         val uri = checkNotNull(app.contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values))
         made += uri
         app.contentResolver.openOutputStream(uri)!!.use { out ->
-            InstrumentationRegistry.getInstrumentation().context.assets.open("check.mp4").use { it.copyTo(out) }
+            InstrumentationRegistry.getInstrumentation().context.assets.open(asset).use { it.copyTo(out) }
         }
         app.contentResolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
+        if (after) {
+            Thread.sleep(800)
+            app.contentResolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.TITLE, title) }, null, null)
+        }
         Thread.sleep(1_100) // DATE_ADDED is in seconds; one tick per second keeps the order plain.
         return uri
     }
@@ -49,13 +57,20 @@ class CheckClipsTest {
 
     @Test fun findsFillsAndRemembers() {
         app.getSharedPreferences("checks", 0).edit().clear().commit()
-        val a = save("check_a.mp4", "Research 5 companies")
-        val b = save("check_b.mp4", "Write the cover letter")
-        Thread.sleep(1_500) // let the scan finish
+        // Three ways Atomic ToDoList could pass the todo's name. Only TITLE on insert is known to
+        // be lost on Android 15 (the scan sets TITLE from the file); this shows which survive.
+        val a = save("check_a.mp4", "Research 5 companies", asset = "check_titled.mp4")
+        val b = save("check_b.mp4", "Write the cover letter", after = true)
+        val c = save("check_c.mp4", "Go for a run")
+        Thread.sleep(3_000) // let any late scan finish
+        val all = Checks.find(app)
+        println("CHECKS API ${Build.VERSION.SDK_INT} in-mp4=${all[0].title} | set-after=${all[1].title} | insert-only=${all[2].title}")
+        assertEquals(listOf(a, b, c), all.map { it.uri })
+        assertEquals("name inside the MP4", "Research 5 companies", all[0].title)
+        made.remove(c); app.contentResolver.delete(c, null, null)
         val found = Checks.find(app)
         println("CHECKS found: " + found.joinToString { "${it.title} ${it.durationMs}ms ${it.key}" })
         assertEquals(listOf(a, b), found.map { it.uri })
-        assertEquals(listOf("Research 5 companies", "Write the cover letter"), found.map { it.title })
         assertTrue("length ${found[0].durationMs}", found[0].durationMs in 2_000..2_800)
 
         // One already has a top photo; the second goes on a new slide.

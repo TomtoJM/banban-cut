@@ -100,6 +100,7 @@ jobs:
           ffmpeg -loglevel error -y -f lavfi -i testsrc2=size=720x1280:rate=30 -t 4 -c:v libx264 -pix_fmt yuv420p app/src/androidTest/assets/port.mp4
           # Like Atomic ToDoList's check videos: 1080x675, 2.4 seconds.
           ffmpeg -loglevel error -y -f lavfi -i testsrc2=size=1080x675:rate=30 -t 2.4 -c:v libx264 -pix_fmt yuv420p app/src/androidTest/assets/check.mp4
+          ffmpeg -loglevel error -y -i app/src/androidTest/assets/check.mp4 -c copy -metadata title="Research 5 companies" app/src/androidTest/assets/check_titled.mp4
 
       - name: Enable KVM
         run: |
