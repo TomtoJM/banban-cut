@@ -1,8 +1,10 @@
 package app.banban.cut
 
 import android.net.Uri
+import android.provider.MediaStore
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.Animatable
@@ -174,6 +176,8 @@ fun EditorScreen(
     startPart: Int? = null,
     startText: Boolean = false,
     startSheet: Boolean = false,
+    startChecks: List<CheckClip>? = null,
+    startPicker: Pair<Int, Int>? = null,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -189,6 +193,15 @@ fun EditorScreen(
     var exporting by remember { mutableStateOf<Int?>(null) }
     var saved by remember { mutableStateOf<List<Uri>?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    // Where the picker's photos go: the empty spot that was tapped (slide, part).
+    var picking by remember { mutableStateOf(startPicker) }
+    var pickFrom by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    // Check videos from Atomic ToDoList waiting to go in; the bar can be put away for now.
+    var checks by remember { mutableStateOf(startChecks ?: emptyList()) }
+    var checksAway by remember { mutableStateOf(false) }
+    val savePrefs = remember { context.getSharedPreferences("save", android.content.Context.MODE_PRIVATE) }
+    var trashAfter by remember { mutableStateOf(savePrefs.getBoolean("trash", true)) }
+    var doneNote by remember { mutableStateOf<String?>(null) }
     val page = pager.currentPage.coerceIn(0, (count - 1).coerceAtLeast(0))
     val slide = deck.slides.getOrNull(page)
     val current by rememberUpdatedState(deck)
@@ -198,6 +211,14 @@ fun EditorScreen(
         // Keep a selection made for the screenshots; after that, a new page starts with nothing selected.
         if (settled) { part = null; tool = Tool.None }
         settled = true
+    }
+    if (startChecks == null && gallery == null) LifecycleResumeEffect(deck.slides.size) {
+        val job = scope.launch {
+            if (Gallery.access(context) == Gallery.Access.None) return@launch
+            val inDeck = current.slides.flatMap { s -> s.frames.mapNotNull { it.uri } }.toSet()
+            checks = withContext(Dispatchers.IO) { Checks.find(context, inDeck) }
+        }
+        onPauseOrDispose { job.cancel() }
     }
     BackHandler(enabled = reviewing || tool != Tool.None || part != null) {
         when {
@@ -257,6 +278,56 @@ fun EditorScreen(
             d.slides.size < Deck.MAX_SLIDES -> addSlide(uri)
             else -> say("슬라이드는 ${Deck.MAX_SLIDES}장까지 만들 수 있어요")
         }
+    }
+
+    /**
+     * Picked photos and videos, in the order picked, into the empty spots of the same kind as
+     * the one tapped (tops, or bottoms), from that slide on; then new slides.
+     */
+    fun place(uris: List<Uri>, from: Pair<Int, Int>) {
+        val before = current
+        val (start, p) = from
+        val slides = current.slides.toMutableList()
+        var i = start
+        var placed = 0
+        for (uri in uris) {
+            if (Deck(slides).uses(uri) > 0) continue
+            while (i < slides.size && !(slides[i].frames.size > p && slides[i].frame(p).uri == null)) i++
+            if (i >= slides.size) {
+                if (slides.size >= Deck.MAX_SLIDES) break
+                slides += newSlide(LastStyle.load(context))
+            }
+            slides[i] = slides[i].with(p, slides[i].frame(p).copy(uri = uri, zoom = 1f, x = 0f, y = 0f, durationMs = Gallery.durationMs(context, uri)))
+            i++
+            placed++
+        }
+        change(current.copy(slides = slides))
+        if (placed > 1) say("${placed}개를 차례로 넣었어요", undo = before)
+        if (placed < uris.size && slides.size >= Deck.MAX_SLIDES) say("슬라이드는 ${Deck.MAX_SLIDES}장까지라 ${uris.size - placed}개는 못 넣었어요")
+    }
+    val systemPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(Deck.MAX_PHOTOS)) { uris ->
+        val from = pickFrom ?: return@rememberLauncherForActivityResult
+        pickFrom = null
+        Deck.keepAccess(context, uris)
+        place(uris, from)
+    }
+    /** An empty spot was tapped: our own picker when we can see the library, else the system's. */
+    fun openPicker(i: Int, p: Int) {
+        part = null
+        if (gallery != null || Gallery.access(context) != Gallery.Access.None) picking = i to p
+        else {
+            pickFrom = i to p
+            systemPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+        }
+    }
+    fun importChecks() {
+        val before = current
+        val n = checks.size
+        change(Checks.fill(current, checks, LastStyle.load(context)))
+        checks = emptyList()
+        part = null; tool = Tool.None
+        goTo(0)
+        say("체크 영상 ${n}개를 아래 칸에 넣었어요", undo = before)
     }
 
     /** From one photo's words straight to the next photo's, keyboard and all. */
@@ -325,11 +396,28 @@ fun EditorScreen(
         reviewing = true
     }
 
+    var trashing by remember { mutableIntStateOf(0) }
+    val trash = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { r ->
+        doneNote = if (r.resultCode == android.app.Activity.RESULT_OK) "쓴 원본 ${trashing}개는 휴지통으로 보냈어요. 30일 안에 갤러리 휴지통에서 되살릴 수 있어요."
+            else "원본은 그대로 뒀어요."
+    }
+
     fun download() {
         exporting = 0
         scope.launch {
+            val used = current.originals()
             runCatching { withContext(Dispatchers.IO) { Art.export(context, current) { n -> scope.launch { exporting = n } } } }
-                .onSuccess { saved = it; reviewing = false }
+                .onSuccess {
+                    saved = it; reviewing = false
+                    withContext(Dispatchers.IO) { Checks.markUsed(context, used) }
+                    doneNote = null
+                    if (trashAfter && used.isNotEmpty() && android.os.Build.VERSION.SDK_INT >= 30) {
+                        // One system confirmation for all of them; the trash keeps them 30 days.
+                        runCatching { MediaStore.createTrashRequest(context.contentResolver, used, true) }
+                            .onSuccess { trashing = used.size; trash.launch(IntentSenderRequest.Builder(it.intentSender).build()) }
+                            .onFailure { doneNote = "원본을 휴지통으로 보내지 못했어요. 원본은 그대로 있어요." }
+                    }
+                }
                 .onFailure { error = if (current.slides.any { it.clipMs != null }) "내려받지 못했어요. 저장 공간을 확인하고 다시 해 주세요. 계속 안 되면 다른 동영상으로 해 주세요." else "사진을 내려받지 못했어요. 저장 공간을 확인하고 다시 해 주세요." }
             exporting = null
         }
@@ -367,6 +455,8 @@ fun EditorScreen(
                 )
             }
 
+            if (checks.isNotEmpty() && !checksAway) CheckBar(checks.size, onImport = ::importChecks, onLater = { checksAway = true })
+
             // ── Top half: slides, side by side with the next one peeking in ──
             Box(
                 Modifier.weight(1.15f).fillMaxWidth()
@@ -401,7 +491,15 @@ fun EditorScreen(
                                     guide = mine && part != null,
                                     moveWords = mine && tool == Tool.Text,
                                     // In words mode, a tap on the photo goes back to the photo.
-                                    onTap = { p -> if (!mine) goTo(i) else if (tool != Tool.None) { tool = Tool.None; part = p } else part = if (part == p) null else p },
+                                    onTap = { p ->
+                                        when {
+                                            !mine -> goTo(i)
+                                            tool != Tool.None -> { tool = Tool.None; part = p }
+                                            // An empty spot opens the photo and video picker straight away.
+                                            s.frame(p).uri == null -> openPicker(i, p)
+                                            else -> part = if (part == p) null else p
+                                        }
+                                    },
                                     onTapWords = { p -> if (!mine) goTo(i) else { part = p; tool = Tool.Text } },
                                     description = "슬라이드 ${i + 1}",
                                     onMove = { p, f -> set(i, current.slides[i].with(p, f)) },
@@ -489,13 +587,21 @@ fun EditorScreen(
             }
         }
 
-        if (reviewing) SaveSheet(deck, tidied, onDownload = ::download, onClose = { reviewing = false })
+        if (reviewing) SaveSheet(
+            deck, tidied, originals = deck.originals().size, trash = trashAfter,
+            onTrash = { trashAfter = it; savePrefs.edit().putBoolean("trash", it).apply() },
+            onDownload = ::download, onClose = { reviewing = false },
+        )
+        picking?.let { from ->
+            MediaPicker(deck, gallery, onDone = { picking = null; place(it, from) }, onClose = { picking = null })
+        }
         exporting?.let { n -> ExportingScreen(n, deck.slides.size, deck.slides.any { it.clipMs != null }) }
         saved?.let { uris ->
             DoneScreen(
                 count = uris.size,
+                note = doneNote,
                 onGallery = { onOpenGallery(uris) },
-                onNew = { saved = null; onNew(); scope.launch { pager.scrollToPage(0) } },
+                onNew = { saved = null; doneNote = null; onNew(); scope.launch { pager.scrollToPage(0) } },
                 onClose = { saved = null },
             )
         }
@@ -507,6 +613,26 @@ fun EditorScreen(
             text = { Text(e) },
             confirmButton = { TextButton(onClick = { error = null }) { Text("닫기") } },
         )
+    }
+}
+
+/**
+ * Atomic ToDoList's check videos are waiting: one line and one button (Toss), and a way to say
+ * not now. Each goes into a bottom spot, in the order the todos were ticked.
+ */
+@Composable
+private fun CheckBar(count: Int, onImport: () -> Unit, onLater: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().background(Tds.White).padding(start = 20.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("체크 영상 ${count}개 가져올까요?", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Tds.Grey900, modifier = Modifier.weight(1f))
+        Button(
+            onClick = onImport,
+            contentPadding = PaddingValues(horizontal = 14.dp),
+            modifier = Modifier.height(36.dp),
+        ) { Text("가져오기", fontSize = 15.sp, fontWeight = FontWeight.Bold) }
+        IconButton(onClick = onLater) { Icon(Icons.Filled.Close, "나중에", tint = Tds.Grey500) }
     }
 }
 
@@ -563,6 +689,15 @@ private fun GalleryGrid(deck: Deck, sample: List<Uri>?, onPick: (Uri) -> Unit, m
     val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { version++ }
     // Coming back from settings or the system's photo chooser can change what's shared.
     LifecycleResumeEffect(Unit) { version++; onPauseOrDispose { } }
+    LaunchedEffect(Unit) {
+        // Asked once, on first open: it's how check videos and the gallery appear by themselves.
+        // A no keeps the app working through the system's photo picker.
+        val prefs = context.getSharedPreferences("gallery", android.content.Context.MODE_PRIVATE)
+        if (sample == null && Gallery.access(context) == Gallery.Access.None && !prefs.getBoolean("asked", false)) {
+            prefs.edit().putBoolean("asked", true).apply()
+            ask.launch(Gallery.permissions)
+        }
+    }
     LaunchedEffect(version) {
         if (sample != null) return@LaunchedEffect
         access = Gallery.access(context)
@@ -811,7 +946,15 @@ private fun Dots(count: Int, page: Int, plusLast: Boolean) {
 
 /** The last look before downloading: every slide as it will be saved, swipe through. */
 @Composable
-fun SaveSheet(deck: Deck, note: String? = null, onDownload: () -> Unit, onClose: () -> Unit) {
+fun SaveSheet(
+    deck: Deck,
+    note: String? = null,
+    originals: Int = 0,
+    trash: Boolean = false,
+    onTrash: (Boolean) -> Unit = {},
+    onDownload: () -> Unit,
+    onClose: () -> Unit,
+) {
     val pager = rememberPagerState { deck.slides.size }
     Column(Modifier.fillMaxSize().background(Tds.White).clickable(remember { MutableInteractionSource() }, null) {}) {
         Row(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -826,6 +969,21 @@ fun SaveSheet(deck: Deck, note: String? = null, onDownload: () -> Unit, onClose:
             // Room for the post's name row above and the buttons and dots below.
             val slideW = minOf(maxWidth - 32.dp, (maxHeight - 112.dp) * 0.8f)
             InstagramPost(deck, pager, slideW)
+        }
+        // Said before it happens, with a switch, so nothing leaves the gallery by surprise.
+        if (originals > 0 && android.os.Build.VERSION.SDK_INT >= 30) Row(
+            Modifier.fillMaxWidth().clickable { onTrash(!trash) }.padding(start = 20.dp, end = 12.dp, top = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("쓴 원본 ${originals}개를 휴지통으로 보낼게요", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Tds.Grey900)
+                Text("30일 안에 갤러리 휴지통에서 되살릴 수 있어요", fontSize = 13.sp, color = Tds.Grey600)
+            }
+            androidx.compose.material3.Switch(
+                checked = trash, onCheckedChange = onTrash,
+                colors = androidx.compose.material3.SwitchDefaults.colors(checkedTrackColor = Tds.Blue500),
+                modifier = Modifier.semantics { contentDescription = "쓴 원본 휴지통으로 보내기" },
+            )
         }
         Column(Modifier.padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = onDownload, modifier = Modifier.fillMaxWidth().height(CtaHeight)) {
@@ -1101,7 +1259,7 @@ private fun ExportingScreen(done: Int, total: Int, video: Boolean) {
 
 /** Toss-style result: a drawn check, one sentence, the next two things people do. */
 @Composable
-fun DoneScreen(count: Int, onGallery: () -> Unit, onNew: () -> Unit, onClose: () -> Unit) {
+fun DoneScreen(count: Int, onGallery: () -> Unit, onNew: () -> Unit, onClose: () -> Unit, note: String? = null) {
     BackHandler(onBack = onClose)
     Column(Modifier.fillMaxSize().background(Tds.White).clickable(remember { MutableInteractionSource() }, null) {}.padding(20.dp)) {
         IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "닫기", tint = Tds.Grey700) }
@@ -1109,6 +1267,7 @@ fun DoneScreen(count: Int, onGallery: () -> Unit, onNew: () -> Unit, onClose: ()
             DrawnCheck(Modifier.size(72.dp))
             Text("${count}장을 갤러리에 내려받았어요", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Tds.Grey900, modifier = Modifier.padding(top = 20.dp))
             Text("인스타그램에서 순서대로 고르면 캐러셀이 돼요", fontSize = 15.sp, color = Tds.Grey600, modifier = Modifier.padding(top = 6.dp))
+            if (note != null) Text(note, fontSize = 14.sp, color = Tds.Grey700, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 16.dp, start = 12.dp, end = 12.dp))
         }
         Button(onClick = onGallery, modifier = Modifier.fillMaxWidth().height(CtaHeight)) {
             Text("갤러리로 가기", fontSize = 17.sp, fontWeight = FontWeight.Bold)

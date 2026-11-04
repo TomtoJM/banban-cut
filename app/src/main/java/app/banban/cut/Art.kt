@@ -160,9 +160,12 @@ object Art {
 
     private val EMPTY = Color.rgb(0x33, 0x3D, 0x4B)
 
+    /** Where saved carousels go, next to the camera's own folder so the gallery shows them first. */
+    const val OUT_FOLDER = "DCIM/반반컷/"
+
     /**
-     * Renders every slide and saves them in order: photo slides as JPEGs in Pictures/BanbanCut,
-     * slides with a video as MP4s in Movies/BanbanCut. Each gets a taken-time a second apart, so
+     * Renders every slide and saves them in order to [OUT_FOLDER]: photo slides as JPEGs,
+     * slides with a video as MP4s. Each gets a taken-time a second apart, so
      * the gallery and Instagram's picker list them in carousel order. Call off the main thread.
      */
     suspend fun export(context: Context, deck: Deck, onProgress: (Int) -> Unit): List<Uri> {
@@ -193,7 +196,7 @@ object Art {
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, name)
             put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-            put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/BanbanCut")
+            put(MediaStore.Images.Media.RELATIVE_PATH, OUT_FOLDER)
             put(MediaStore.MediaColumns.DATE_TAKEN, taken)
             put(MediaStore.Images.Media.IS_PENDING, 1)
         }
@@ -210,7 +213,7 @@ object Art {
         val values = ContentValues().apply {
             put(MediaStore.Video.Media.DISPLAY_NAME, name)
             put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-            put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/BanbanCut")
+            put(MediaStore.Video.Media.RELATIVE_PATH, OUT_FOLDER)
             put(MediaStore.MediaColumns.DATE_TAKEN, taken)
             put(MediaStore.Video.Media.IS_PENDING, 1)
         }

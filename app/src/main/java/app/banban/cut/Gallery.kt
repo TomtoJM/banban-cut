@@ -68,8 +68,8 @@ object Gallery {
             files,
             arrayOf(MediaStore.MediaColumns._ID, type, MediaStore.MediaColumns.DURATION),
             "$type IN (${MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE}, ${MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO})" +
-                " AND ($path IS NULL OR ($path NOT LIKE ? AND $path NOT LIKE ?))",
-            arrayOf("Pictures/BanbanCut%", "Movies/BanbanCut%"),
+                " AND ($path IS NULL OR ($path NOT LIKE ? AND $path NOT LIKE ? AND $path NOT LIKE ?))",
+            arrayOf("Pictures/BanbanCut%", "Movies/BanbanCut%", "${Art.OUT_FOLDER}%"),
             "${MediaStore.MediaColumns.DATE_ADDED} DESC",
         )?.use { c ->
             val id = c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)

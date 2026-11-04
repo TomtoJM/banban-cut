@@ -98,6 +98,8 @@ jobs:
           ffmpeg -loglevel error -y -f lavfi -i testsrc2=size=1280x720:rate=30 -f lavfi -i sine=frequency=440:sample_rate=44100 -t 5 \
             -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest app/src/androidTest/assets/land.mp4
           ffmpeg -loglevel error -y -f lavfi -i testsrc2=size=720x1280:rate=30 -t 4 -c:v libx264 -pix_fmt yuv420p app/src/androidTest/assets/port.mp4
+          # Like Atomic ToDoList's check videos: 1080x675, 2.4 seconds.
+          ffmpeg -loglevel error -y -f lavfi -i testsrc2=size=1080x675:rate=30 -t 2.4 -c:v libx264 -pix_fmt yuv420p app/src/androidTest/assets/check.mp4
 
       - name: Enable KVM
         run: |
@@ -108,7 +110,7 @@ jobs:
       - name: Save videos on an emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 30
+          api-level: 35
           target: google_apis
           arch: x86_64
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
@@ -116,7 +118,7 @@ jobs:
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true || touch failed
             mkdir -p videocheck
             for f in 1-video-photo 2-photo-video 3-two-videos 4-full-video; do adb exec-out run-as app.banban.cut cat files/videocheck/$f.png > videocheck/$f.png || true; adb exec-out run-as app.banban.cut cat files/videocheck/$f.mp4 > videocheck/$f.mp4 || true; done
-            adb logcat -d | grep -E "VIDEOCHECK|ExportException|Transformer|AndroidRuntime|TestRunner" | tail -120 || true
+            adb logcat -d | grep -E "VIDEOCHECK|CHECKS|ExportException|Transformer|AndroidRuntime|TestRunner" | tail -120 || true
             test ! -f failed
 
       - name: Share frames

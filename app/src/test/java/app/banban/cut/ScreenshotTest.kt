@@ -65,8 +65,24 @@ class ScreenshotTest {
     private fun shoot(name: String) = compose.onRoot().captureRoboImage("build/screens/$name.png")
 
     @Composable
-    private fun Editor(d: Deck = deck, gallery: List<Uri>? = (1..4).map(::uri), part: Int? = null, text: Boolean = false, sheet: Boolean = false) =
-        EditorScreen(d, {}, UpdateState.Latest, {}, {}, {}, {}, {}, {}, gallery, part, text, sheet)
+    private fun Editor(
+        d: Deck = deck, gallery: List<Uri>? = (1..4).map(::uri), part: Int? = null, text: Boolean = false, sheet: Boolean = false,
+        checks: List<CheckClip>? = null, picker: Pair<Int, Int>? = null,
+    ) = EditorScreen(d, {}, UpdateState.Latest, {}, {}, {}, {}, {}, {}, gallery, part, text, sheet, checks ?: emptyList(), picker)
+
+    /** Stand-ins for Atomic ToDoList's check videos: 1080×675, in the phone's own library. */
+    private val clips by lazy { listOf("Research 5 companies", "Write the cover letter", "Go for a run").mapIndexed { i, title ->
+        val u = Uri.parse("content://media/external/video/media/${101 + i}")
+        val bmp = Bitmap.createBitmap(1080, 675, Bitmap.Config.ARGB_8888)
+        Canvas(bmp).apply {
+            drawColor(android.graphics.Color.rgb(0xF4, 0xF6, 0xF8))
+            drawCircle(270f, 337f, 110f, Paint().apply { color = android.graphics.Color.rgb(0x31, 0x82, 0xF6) })
+            drawRect(440f, 300f, 900f, 374f, Paint().apply { color = android.graphics.Color.rgb(0x8B, 0x95, 0xA1) })
+        }
+        Photos.put(u, bmp)
+        Gallery.noteVideo(u, 2_400)
+        CheckClip(u, title, 2_400, "check$i.mp4|1000")
+    } }
 
     @Test fun editor() {
         compose.setContent { Themed { Editor() } }
@@ -122,5 +138,35 @@ class ScreenshotTest {
     @Test fun saved() {
         compose.setContent { Themed { DoneScreen(3, {}, {}, {}) } }
         shoot("6-done")
+    }
+
+    @Test fun checksWaiting() {
+        compose.setContent { Themed { Editor(d = Deck(listOf(Slide())), checks = clips) } }
+        shoot("8-checks-waiting")
+    }
+
+    @Test fun checksIn() {
+        val d = Checks.fill(Deck(listOf(Slide())), clips, Frame())
+        compose.setContent { Themed { Editor(d = d) } }
+        shoot("9-checks-in")
+    }
+
+    @Test fun picker() {
+        val d = Checks.fill(Deck(listOf(Slide())), clips, Frame())
+        compose.setContent { Themed { Editor(d = d, picker = 0 to 0) } }
+        shoot("10-picker")
+    }
+
+    @Test fun reviewTrash() {
+        val top = Uri.parse("content://media/external/images/media/7")
+        Photos.put(top, Photos.peek(uri(1))!!)
+        val d = Checks.fill(Deck(listOf(Slide(top = Frame(top, "Day one.")))), clips.take(1), Frame())
+        compose.setContent { Themed { Editor(d = d, sheet = true) } }
+        shoot("11-review-trash")
+    }
+
+    @Test fun savedTrash() {
+        compose.setContent { Themed { DoneScreen(2, {}, {}, {}, note = "쓴 원본 2개는 휴지통으로 보냈어요. 30일 안에 갤러리 휴지통에서 되살릴 수 있어요.") } }
+        shoot("12-done-trash")
     }
 }
