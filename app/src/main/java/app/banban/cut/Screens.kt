@@ -202,8 +202,6 @@ fun EditorScreen(
     var checksAway by remember { mutableStateOf(false) }
     val savePrefs = remember { context.getSharedPreferences("save", android.content.Context.MODE_PRIVATE) }
     var trashAfter by remember { mutableStateOf(savePrefs.getBoolean("trash", true)) }
-    // Download as carousel slides (posts) or as one 9:16 reel video; remembered for next time.
-    var reel by remember { mutableStateOf(savePrefs.getBoolean("reel", false)) }
     var savedReel by remember { mutableStateOf(false) }
     var doneNote by remember { mutableStateOf<String?>(null) }
     val page = pager.currentPage.coerceIn(0, (count - 1).coerceAtLeast(0))
@@ -334,6 +332,13 @@ fun EditorScreen(
         say("체크 영상 ${n}개를 아래 칸에 넣었어요", undo = before)
     }
 
+    /** Post or reel: the same slides, framed for the other shape. Undoable, like every big change. */
+    fun shape(reel: Boolean) {
+        val before = current
+        change(current.copy(reel = reel))
+        say(if (reel) "릴스 9:16으로 바꿨어요. 사진 위치와 글자를 확인해 주세요" else "게시물 4:5로 바꿨어요", undo = before)
+    }
+
     /** From one photo's words straight to the next photo's, keyboard and all. */
     fun nextWords(): (() -> Unit)? {
         val p = part ?: return null
@@ -410,7 +415,7 @@ fun EditorScreen(
         exporting = 0
         scope.launch {
             val used = current.originals()
-            val asReel = reel
+            val asReel = current.reel
             runCatching {
                 withContext(Dispatchers.IO) {
                     if (asReel) Art.exportReel(context, current) { n -> scope.launch { exporting = n } }
@@ -442,9 +447,12 @@ fun EditorScreen(
             // ── Navigation bar (HIG): version · position · save ──
             Row(Modifier.fillMaxWidth().height(52.dp).background(Tds.White).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) { UpdateChip(update, onCheckUpdate, onInstall) }
-                Text(
-                    if (slide == null) "새 슬라이드" else "${page + 1} / ${deck.slides.size}",
-                    fontSize = 17.sp, fontWeight = FontWeight.Bold, color = Tds.Grey900,
+                // The shape comes first (HIG: a segmented control in the navigation bar for a choice
+                // that changes the view). Photos and words are framed in it; the dots show position.
+                Segmented(
+                    listOf("게시물 4:5", "릴스 9:16"), if (deck.reel) 1 else 0,
+                    { i -> if ((i == 1) != current.reel) shape(i == 1) },
+                    Modifier.width(196.dp),
                 )
                 Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
                     // While a photo is being edited its 완료 is the one action; 저장 steps back.
@@ -479,9 +487,9 @@ fun EditorScreen(
                 contentAlignment = Alignment.Center,
             ) {
                 BoxWithConstraints(Modifier.fillMaxSize().padding(vertical = 10.dp)) {
-                    // Fit a 4:5 slide in the space, then leave the rest at the sides for the neighbours to peek.
-                    val slideW = minOf(maxWidth - 64.dp, maxHeight * 0.8f)
-                    val slideH = slideW * 1.25f
+                    // Fit a slide of the deck's shape in the space, then leave the rest at the sides for the neighbours to peek.
+                    val slideW = minOf(maxWidth - 64.dp, maxHeight * deck.aspect)
+                    val slideH = slideW / deck.aspect
                     val side = (maxWidth - slideW) / 2
                     HorizontalPager(
                         state = pager,
@@ -502,6 +510,7 @@ fun EditorScreen(
                                     s,
                                     selectedPart = if (mine) part else null,
                                     modifier = Modifier.fillMaxSize(),
+                                    aspect = deck.aspect,
                                     guide = mine && part != null,
                                     moveWords = mine && tool == Tool.Text,
                                     // In words mode, a tap on the photo goes back to the photo.
@@ -604,13 +613,12 @@ fun EditorScreen(
         if (reviewing) SaveSheet(
             deck, tidied, originals = deck.originals().size, trash = trashAfter,
             onTrash = { trashAfter = it; savePrefs.edit().putBoolean("trash", it).apply() },
-            reel = reel, onReel = { reel = it; savePrefs.edit().putBoolean("reel", it).apply() },
             onDownload = ::download, onClose = { reviewing = false },
         )
         picking?.let { from ->
             MediaPicker(deck, gallery, onDone = { picking = null; place(it, from) }, onClose = { picking = null })
         }
-        exporting?.let { n -> ExportingScreen(n, deck.slides.size, deck.slides.any { it.clipMs != null }, reel) }
+        exporting?.let { n -> ExportingScreen(n, deck.slides.size, deck.slides.any { it.clipMs != null }, deck.reel) }
         saved?.let { uris ->
             DoneScreen(
                 count = uris.size,
@@ -969,8 +977,6 @@ fun SaveSheet(
     originals: Int = 0,
     trash: Boolean = false,
     onTrash: (Boolean) -> Unit = {},
-    reel: Boolean = false,
-    onReel: (Boolean) -> Unit = {},
     onDownload: () -> Unit,
     onClose: () -> Unit,
 ) {
@@ -984,12 +990,8 @@ fun SaveSheet(
             (note?.let { "$it " } ?: "다음에 열면 이어서 고칠 수 있어요. ") + "이대로 갤러리에 내려받을까요?",
             fontSize = 15.sp, color = Tds.Grey600, modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 8.dp),
         )
-        Segmented(
-            listOf("게시물 · 사진 ${deck.slides.size}장", "릴스 · 영상 1개"), if (reel) 1 else 0,
-            { onReel(it == 1) }, Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-        )
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().background(Tds.Grey100).padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
-            if (reel) {
+            if (deck.reel) {
                 val slideW = minOf(maxWidth - 32.dp, (maxHeight - 28.dp) * (9f / 16f))
                 ReelPreview(deck, pager, slideW)
             } else {
@@ -1015,7 +1017,7 @@ fun SaveSheet(
         }
         Column(Modifier.padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = onDownload, modifier = Modifier.fillMaxWidth().height(CtaHeight)) {
-                Text(if (reel) "릴스 영상으로 내려받기 (${clock(Video.reelMs(deck))})" else "갤러리에 내려받기 (${deck.slides.size}장)", fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                Text(if (deck.reel) "릴스 영상으로 내려받기 (${clock(Video.reelMs(deck))})" else "갤러리에 내려받기 (${deck.slides.size}장)", fontSize = 17.sp, fontWeight = FontWeight.Bold)
             }
             WeakButton("계속 고치기", onClose, Modifier.fillMaxWidth().height(CtaHeight))
         }
@@ -1112,7 +1114,7 @@ private fun ReelPreview(deck: Deck, pager: PagerState, slideW: Dp) {
 /** Toss-style segmented control: a grey track, the chosen side lifted in white. */
 @Composable
 private fun Segmented(options: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
-    Row(modifier.fillMaxWidth().height(40.dp).background(Tds.Grey100, RoundedCornerShape(10.dp)).padding(3.dp)) {
+    Row(modifier.height(36.dp).background(Tds.Grey100, RoundedCornerShape(10.dp)).padding(3.dp)) {
         options.forEachIndexed { i, label ->
             val on = i == selected
             Box(
@@ -1122,7 +1124,7 @@ private fun Segmented(options: List<String>, selected: Int, onSelect: (Int) -> U
                     .clickable { onSelect(i) }
                     .semantics { contentDescription = label + if (on) ", 선택됨" else "" },
                 contentAlignment = Alignment.Center,
-            ) { Text(label, fontSize = 14.sp, fontWeight = if (on) FontWeight.Bold else FontWeight.Medium, color = if (on) Tds.Grey900 else Tds.Grey600) }
+            ) { Text(label, fontSize = 14.sp, maxLines = 1, fontWeight = if (on) FontWeight.Bold else FontWeight.Medium, color = if (on) Tds.Grey900 else Tds.Grey600) }
         }
     }
 }

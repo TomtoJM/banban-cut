@@ -141,8 +141,18 @@ class ScreenshotTest {
     }
 
     @Test fun reviewReel() {
-        compose.setContent { Themed { SaveSheet(deck, reel = true, onDownload = {}, onClose = {}) } }
+        compose.setContent { Themed { SaveSheet(deck.copy(reel = true), onDownload = {}, onClose = {}) } }
         shoot("13-review-reel")
+    }
+
+    @Test fun editorReel() {
+        compose.setContent { Themed { Editor(d = deck.copy(reel = true)) } }
+        shoot("14-editor-reel")
+    }
+
+    @Test fun editorReelSelected() {
+        compose.setContent { Themed { Editor(d = deck.copy(reel = true), part = 1) } }
+        shoot("15-editor-reel-photo")
     }
 
     @Test fun checksWaiting() {

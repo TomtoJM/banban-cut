@@ -62,7 +62,7 @@ class MainActivity : ComponentActivity() {
                             onOpenSecurity = ::openSecurity,
                             onSave = { Deck.save(ctx, it) },
                             onOpenGallery = ::openGallery,
-                            onNew = { deck = Deck().orBlank(ctx); Deck.save(ctx, deck) },
+                            onNew = { deck = Deck(reel = deck.reel).orBlank(ctx); Deck.save(ctx, deck) },
                         )
                     }
                 }
@@ -71,7 +71,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun Deck.orBlank(context: android.content.Context) =
-        if (slides.isNotEmpty()) this else Deck(listOf(LastStyle.load(context).copy(uri = null, text = "", durationMs = 0L).let { Slide(top = it, bottom = it) }))
+        if (slides.isNotEmpty()) this else copy(slides = listOf(LastStyle.load(context).copy(uri = null, text = "", durationMs = 0L).let { Slide(top = it, bottom = it) }))
 
     /** Opens the first downloaded slide in the phone's gallery app; the rest sit next to it. */
     private fun openGallery(uris: List<Uri>) {

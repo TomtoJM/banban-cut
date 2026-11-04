@@ -99,7 +99,14 @@ data class Slide(
  * The carousel being made, plus every photo picked for it. The photos wait in the tray under the
  * slides, so any of them can be dropped into any spot. Instagram takes up to 20 slides in one post.
  */
-data class Deck(val slides: List<Slide> = emptyList(), val photos: List<Uri> = emptyList()) {
+/**
+ * [reel] is the shape it's made in: false for a 4:5 carousel post, true for a 9:16 reel. It's
+ * chosen while editing, because where photos sit and where words fit depend on it.
+ */
+data class Deck(val slides: List<Slide> = emptyList(), val photos: List<Uri> = emptyList(), val reel: Boolean = false) {
+    /** Width over height of a slide in this shape. */
+    val aspect get() = if (reel) 9f / 16f else WIDTH.toFloat() / HEIGHT
+
     /** How many spots on the slides show this photo. */
     fun uses(uri: Uri) = slides.sumOf { s -> s.frames.count { it.uri == uri } }
 
@@ -162,7 +169,7 @@ data class Deck(val slides: List<Slide> = emptyList(), val photos: List<Uri> = e
                 val p = o.optJSONArray("photos")
                 val photos = if (p != null) (0 until p.length()).map { Uri.parse(p.getString(it)) }
                     else slides.flatMap { s -> s.frames.mapNotNull { it.uri } }.distinct()
-                Deck(slides, photos)
+                Deck(slides, photos, o.optBoolean("reel", false))
             }.getOrDefault(Deck())
         }
 
@@ -170,6 +177,7 @@ data class Deck(val slides: List<Slide> = emptyList(), val photos: List<Uri> = e
             val raw = JSONObject()
                 .put("slides", JSONArray().apply { deck.slides.forEach { put(it.toJson()) } })
                 .put("photos", JSONArray().apply { deck.photos.forEach { put(it.toString()) } })
+                .put("reel", deck.reel)
                 .toString()
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY, raw).apply()
         }
