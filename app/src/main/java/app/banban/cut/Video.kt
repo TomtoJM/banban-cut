@@ -45,24 +45,99 @@ object Video {
     const val WIDTH = 1080
     const val HEIGHT = 1350
 
-    suspend fun export(context: Context, slide: Slide, face: Typeface, out: File) {
+    /** A reel: Instagram's full-screen 9:16. */
+    const val REEL_WIDTH = 1080
+    const val REEL_HEIGHT = 1920
+
+    /** How long a slide with no video shows in a reel: one check video's length. */
+    const val STILL_MS = 2_400L
+
+    /** How long a reel of [deck] runs. */
+    fun reelMs(deck: Deck) = deck.slides.sumOf { it.clipMs ?: STILL_MS }
+
+    suspend fun export(context: Context, slide: Slide, face: Typeface, out: File, width: Int = WIDTH, height: Int = HEIGHT) {
         val ms = checkNotNull(slide.clipMs)
         // Everything that reads files happens here, off the main thread.
-        val cover = Bitmap.createBitmap(WIDTH, HEIGHT, Bitmap.Config.ARGB_8888)
-        withContext(Dispatchers.IO) {
-            Art.draw(Canvas(cover), slide, WIDTH.toFloat(), HEIGHT.toFloat(), face, overVideo = true) { Photos.load(context, it) }
-        }
+        val cover = cover(context, slide, face, width, height, overVideo = true)
         val videos = slide.frames.withIndex().filter { it.value.isVideo }
         val items = videos.map { (part, f) ->
             val size = withContext(Dispatchers.IO) { size(context, checkNotNull(f.uri)) }
-            item(slide, part, f, size, ms, alone = videos.size == 1)
+            item(slide, part, f, size, ms, alone = videos.size == 1, width, height)
         }
         val composition = Composition.Builder(items.map { EditedMediaItemSequence.Builder(it).build() })
             .setEffects(Effects(emptyList(), listOf(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(cover))))))
             // Phones film in HDR more and more; the post and the photos next to it are SDR.
             .setHdrMode(Composition.HDR_MODE_TONE_MAP_HDR_TO_SDR_USING_OPEN_GL)
-            .apply { if (items.size > 1) setVideoCompositorSettings(Halves) }
+            .apply { if (items.size > 1) setVideoCompositorSettings(halves(width, height)) }
             .build()
+        run(context, composition, out)
+        cover.recycle()
+    }
+
+    /**
+     * Every slide one after another as one 9:16 video: a photo slide shows for [STILL_MS], a
+     * video slide for its video's length. [onProgress] counts slides made ready.
+     */
+    suspend fun reel(context: Context, deck: Deck, face: Typeface, out: File, onProgress: (Int) -> Unit) {
+        val w = REEL_WIDTH
+        val h = REEL_HEIGHT
+        val temp = mutableListOf<File>()
+        val covers = mutableListOf<Bitmap>()
+        try {
+            val items = deck.slides.mapIndexed { i, slide ->
+                val ms = slide.clipMs
+                val videos = slide.frames.withIndex().filter { it.value.isVideo }
+                val item = when {
+                    ms == null -> {
+                        // A still: the whole slide as one picture, held.
+                        val bmp = cover(context, slide, face, w, h, overVideo = false)
+                        val f = File(context.cacheDir, "reel-$i.png").also { temp += it }
+                        withContext(Dispatchers.IO) { f.outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) } }
+                        bmp.recycle()
+                        val media = MediaItem.Builder().setUri(android.net.Uri.fromFile(f)).setMimeType(MimeTypes.IMAGE_PNG).setImageDurationMs(STILL_MS).build()
+                        EditedMediaItem.Builder(media).setFrameRate(30).build()
+                    }
+                    videos.size == 1 -> {
+                        // One video: moved into place and covered with the rest of the slide, in one go.
+                        val (part, f) = videos[0]
+                        val cover = cover(context, slide, face, w, h, overVideo = true).also { covers += it }
+                        val size = withContext(Dispatchers.IO) { size(context, checkNotNull(f.uri)) }
+                        item(slide, part, f, size, ms, alone = true, w, h, OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(cover))))
+                    }
+                    else -> {
+                        // Two videos need putting together first; that slide is made on its own.
+                        val f = File(context.cacheDir, "reel-$i.mp4").also { temp += it }
+                        export(context, slide, face, f, w, h)
+                        EditedMediaItem.Builder(MediaItem.fromUri(android.net.Uri.fromFile(f))).build()
+                    }
+                }
+                onProgress(i + 1)
+                item
+            }
+            val sequence = EditedMediaItemSequence.Builder(items)
+                // Photos and silent videos get silence, so videos with sound keep theirs.
+                .experimentalSetForceAudioTrack(true)
+                .build()
+            val composition = Composition.Builder(sequence)
+                .setEffects(Effects(emptyList(), listOf(Presentation.createForWidthAndHeight(w, h, Presentation.LAYOUT_SCALE_TO_FIT))))
+                .setHdrMode(Composition.HDR_MODE_TONE_MAP_HDR_TO_SDR_USING_OPEN_GL)
+                .build()
+            run(context, composition, out)
+        } finally {
+            temp.forEach { it.delete() }
+            covers.forEach { it.recycle() }
+        }
+    }
+
+    private suspend fun cover(context: Context, slide: Slide, face: Typeface, w: Int, h: Int, overVideo: Boolean): Bitmap {
+        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        withContext(Dispatchers.IO) {
+            Art.draw(Canvas(bmp), slide, w.toFloat(), h.toFloat(), face, overVideo = overVideo) { Photos.load(context, it) }
+        }
+        return bmp
+    }
+
+    private suspend fun run(context: Context, composition: Composition, out: File) {
         // Transformer runs from a thread with a Looper and calls back on it.
         withContext(Dispatchers.Main) {
             suspendCancellableCoroutine { done ->
@@ -79,7 +154,6 @@ object Video {
                 transformer.start(composition, out.path)
             }
         }
-        cover.recycle()
     }
 
     /**
@@ -87,18 +161,22 @@ object Video {
      * the only video on a two-photo slide, it's also moved into its half of the full frame here,
      * so no compositing is needed.
      */
-    private fun item(slide: Slide, part: Int, f: Frame, size: android.util.Size, ms: Long, alone: Boolean): EditedMediaItem {
-        val r = Art.area(slide, part, WIDTH.toFloat(), HEIGHT.toFloat())
+    private fun item(
+        slide: Slide, part: Int, f: Frame, size: android.util.Size, ms: Long, alone: Boolean,
+        width: Int, height: Int, cover: Effect? = null,
+    ): EditedMediaItem {
+        val r = Art.area(slide, part, width.toFloat(), height.toFloat())
         val v = Art.visible(size.width, size.height, f, r)
         val effects = mutableListOf<Effect>(
             Crop(-1 + 2 * v.left, -1 + 2 * v.right, 1 - 2 * v.bottom, 1 - 2 * v.top),
             Presentation.createForWidthAndHeight(r.width().toInt(), r.height().toInt(), Presentation.LAYOUT_STRETCH_TO_FIT),
         )
         if (alone && slide.layout == Layout.Halves) {
-            effects += Presentation.createForWidthAndHeight(WIDTH, HEIGHT, Presentation.LAYOUT_SCALE_TO_FIT)
+            effects += Presentation.createForWidthAndHeight(width, height, Presentation.LAYOUT_SCALE_TO_FIT)
             val shift = if (part == 0) 0.5f else -0.5f
             effects += MatrixTransformation { Matrix().apply { postTranslate(0f, shift) } }
         }
+        if (cover != null) effects += cover
         val media = MediaItem.Builder()
             .setUri(f.uri)
             .setClippingConfiguration(MediaItem.ClippingConfiguration.Builder().setEndPositionMs(ms).build())
@@ -107,8 +185,8 @@ object Video {
     }
 
     /** Two videos: the first sequence fills the top half, the second the bottom. */
-    private val Halves = object : VideoCompositorSettings {
-        override fun getOutputSize(inputSizes: List<Size>) = Size(WIDTH, HEIGHT)
+    private fun halves(width: Int, height: Int) = object : VideoCompositorSettings {
+        override fun getOutputSize(inputSizes: List<Size>) = Size(width, height)
         override fun getOverlaySettings(inputId: Int, presentationTimeUs: Long): OverlaySettings =
             StaticOverlaySettings.Builder()
                 .setOverlayFrameAnchor(0f, 0f)

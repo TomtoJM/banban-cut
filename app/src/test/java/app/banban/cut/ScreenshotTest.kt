@@ -140,6 +140,11 @@ class ScreenshotTest {
         shoot("6-done")
     }
 
+    @Test fun reviewReel() {
+        compose.setContent { Themed { SaveSheet(deck, reel = true, onDownload = {}, onClose = {}) } }
+        shoot("13-review-reel")
+    }
+
     @Test fun checksWaiting() {
         compose.setContent { Themed { Editor(d = Deck(listOf(Slide())), checks = clips) } }
         shoot("8-checks-waiting")

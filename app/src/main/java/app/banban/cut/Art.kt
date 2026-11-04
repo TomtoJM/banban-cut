@@ -114,7 +114,13 @@ object Art {
     }
 
     /** Where nothing of Instagram's sits on top of the post. */
-    fun safe(w: Float, h: Float) = RectF(w * Deck.SAFE_SIDE, h * Deck.SAFE_TOP, w * (1 - Deck.SAFE_SIDE), h * (1 - Deck.SAFE_BOTTOM))
+    fun safe(w: Float, h: Float) =
+        if (h > w * 1.6f) RectF(w * Deck.SAFE_SIDE, h * REEL_TOP, w * (1 - Deck.SAFE_SIDE), h * (1 - REEL_BOTTOM))
+        else RectF(w * Deck.SAFE_SIDE, h * Deck.SAFE_TOP, w * (1 - Deck.SAFE_SIDE), h * (1 - Deck.SAFE_BOTTOM))
+
+    /** What a reel's name, caption and buttons cover, measured from the owner's own guide. */
+    private const val REEL_TOP = 0.155f
+    private const val REEL_BOTTOM = 0.234f
 
     /**
      * Lays out a frame's words and finds where they go: centred on the frame's chosen spot, then
@@ -189,6 +195,17 @@ object Art {
             onProgress(i + 1)
             uri
         }
+    }
+
+    /** All slides as one 9:16 reel video in [OUT_FOLDER]. Call off the main thread. */
+    suspend fun exportReel(context: Context, deck: Deck, onProgress: (Int) -> Unit): List<Uri> {
+        val now = System.currentTimeMillis()
+        val name = "banban-reel-" + SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date(now))
+        val file = java.io.File(context.cacheDir, "$name.mp4")
+        try {
+            Video.reel(context, deck, typeface(context), file, onProgress)
+            return listOf(saveVideo(context, file, "$name.mp4", now))
+        } finally { file.delete() }
     }
 
     private fun save(context: Context, bmp: Bitmap, name: String, taken: Long): Uri {

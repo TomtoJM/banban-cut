@@ -85,4 +85,37 @@ class VideoExportTest {
         val v = clip("port.mp4", 4000)
         check("4-full-video", Slide(layout = Layout.Single, top = Frame(v, "Small wins\nadd up.", zoom = 1.5f, x = 0.5f, textY = 0.8f, durationMs = 4000)), 4000)
     }
+
+    /** All slides as one reel: a photo slide, a slide with one video, a slide with two. */
+    @Test fun reel() = runBlocking {
+        val land = clip("land.mp4", 5000)
+        val port = clip("port.mp4", 4000)
+        val deck = Deck(listOf(
+            Slide(top = Frame(photo(), "Write it down."), bottom = Frame(photo(), "Then do it.")),
+            Slide(top = Frame(land, "Monday.", durationMs = 5000), bottom = Frame(photo(), "One task.")),
+            Slide(top = Frame(land, "Tuesday.", durationMs = 5000), bottom = Frame(port, "One check.", durationMs = 4000)),
+        ))
+        val expect = Video.reelMs(deck)
+        assertEquals(2400L + 5000L + 4000L, expect)
+        val file = File(out, "5-reel.mp4")
+        Video.reel(app, deck, Art.typeface(app), file) {}
+        val r = MediaMetadataRetriever()
+        try {
+            r.setDataSource(file.path)
+            val w = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)!!.toInt()
+            val h = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)!!.toInt()
+            val turn = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toInt() ?: 0
+            val shown = if (turn % 180 == 0) w to h else h to w
+            val ms = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)!!.toLong()
+            val audio = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO)
+            println("VIDEOCHECK 5-reel: ${shown.first}x${shown.second} ${ms}ms audio=$audio ${file.length() / 1024}KB")
+            assertEquals(Video.REEL_WIDTH to Video.REEL_HEIGHT, shown)
+            assertTrue("reel length $ms, wanted about $expect", kotlin.math.abs(ms - expect) < 900)
+            listOf(1_000L, 4_500L, 9_500L).forEachIndexed { k, at ->
+                r.getFrameAtTime(at * 1000, MediaMetadataRetriever.OPTION_CLOSEST)!!.let { frame ->
+                    File(out, "5-reel-${k + 1}.png").outputStream().use { frame.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                }
+            }
+        } finally { r.release() }
+    }
 }

@@ -99,6 +99,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -201,6 +202,9 @@ fun EditorScreen(
     var checksAway by remember { mutableStateOf(false) }
     val savePrefs = remember { context.getSharedPreferences("save", android.content.Context.MODE_PRIVATE) }
     var trashAfter by remember { mutableStateOf(savePrefs.getBoolean("trash", true)) }
+    // Download as carousel slides (posts) or as one 9:16 reel video; remembered for next time.
+    var reel by remember { mutableStateOf(savePrefs.getBoolean("reel", false)) }
+    var savedReel by remember { mutableStateOf(false) }
     var doneNote by remember { mutableStateOf<String?>(null) }
     val page = pager.currentPage.coerceIn(0, (count - 1).coerceAtLeast(0))
     val slide = deck.slides.getOrNull(page)
@@ -406,9 +410,15 @@ fun EditorScreen(
         exporting = 0
         scope.launch {
             val used = current.originals()
-            runCatching { withContext(Dispatchers.IO) { Art.export(context, current) { n -> scope.launch { exporting = n } } } }
+            val asReel = reel
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    if (asReel) Art.exportReel(context, current) { n -> scope.launch { exporting = n } }
+                    else Art.export(context, current) { n -> scope.launch { exporting = n } }
+                }
+            }
                 .onSuccess {
-                    saved = it; reviewing = false
+                    saved = it; savedReel = asReel; reviewing = false
                     withContext(Dispatchers.IO) { Checks.markUsed(context, used) }
                     // Downloaded means done: the editor starts empty for the next one.
                     part = null; tool = Tool.None
@@ -422,7 +432,7 @@ fun EditorScreen(
                             .onFailure { doneNote = "원본을 휴지통으로 보내지 못했어요. 원본은 그대로 있어요." }
                     }
                 }
-                .onFailure { error = if (current.slides.any { it.clipMs != null }) "내려받지 못했어요. 저장 공간을 확인하고 다시 해 주세요. 계속 안 되면 다른 동영상으로 해 주세요." else "사진을 내려받지 못했어요. 저장 공간을 확인하고 다시 해 주세요." }
+                .onFailure { error = if (asReel || current.slides.any { it.clipMs != null }) "내려받지 못했어요. 저장 공간을 확인하고 다시 해 주세요. 계속 안 되면 다른 동영상으로 해 주세요." else "사진을 내려받지 못했어요. 저장 공간을 확인하고 다시 해 주세요." }
             exporting = null
         }
     }
@@ -594,15 +604,17 @@ fun EditorScreen(
         if (reviewing) SaveSheet(
             deck, tidied, originals = deck.originals().size, trash = trashAfter,
             onTrash = { trashAfter = it; savePrefs.edit().putBoolean("trash", it).apply() },
+            reel = reel, onReel = { reel = it; savePrefs.edit().putBoolean("reel", it).apply() },
             onDownload = ::download, onClose = { reviewing = false },
         )
         picking?.let { from ->
             MediaPicker(deck, gallery, onDone = { picking = null; place(it, from) }, onClose = { picking = null })
         }
-        exporting?.let { n -> ExportingScreen(n, deck.slides.size, deck.slides.any { it.clipMs != null }) }
+        exporting?.let { n -> ExportingScreen(n, deck.slides.size, deck.slides.any { it.clipMs != null }, reel) }
         saved?.let { uris ->
             DoneScreen(
                 count = uris.size,
+                reel = savedReel,
                 note = doneNote,
                 onGallery = { onOpenGallery(uris) },
                 onNew = { saved = null; doneNote = null },
@@ -791,6 +803,7 @@ fun SlideCanvas(
     onTapWords: ((Int) -> Unit)? = null,
     description: String? = null,
     onMove: (Int, Frame) -> Unit = { _, _ -> },
+    aspect: Float = Deck.WIDTH.toFloat() / Deck.HEIGHT,
 ) {
     val context = LocalContext.current
     val face = remember { Art.typeface(context) }
@@ -802,7 +815,7 @@ fun SlideCanvas(
     val partOf = { y: Float, h: Float -> if (latest.layout == Layout.Single || y < h / 2) 0 else 1 }
 
     Canvas(
-        modifier.aspectRatio(Deck.WIDTH.toFloat() / Deck.HEIGHT).clip(RoundedCornerShape(4.dp))
+        modifier.aspectRatio(aspect).clip(RoundedCornerShape(4.dp))
             .then(if (description != null) Modifier.semantics { contentDescription = description } else Modifier)
             .pointerInput(Unit) {
                 detectTapGestures { at ->
@@ -956,6 +969,8 @@ fun SaveSheet(
     originals: Int = 0,
     trash: Boolean = false,
     onTrash: (Boolean) -> Unit = {},
+    reel: Boolean = false,
+    onReel: (Boolean) -> Unit = {},
     onDownload: () -> Unit,
     onClose: () -> Unit,
 ) {
@@ -969,10 +984,19 @@ fun SaveSheet(
             (note?.let { "$it " } ?: "다음에 열면 이어서 고칠 수 있어요. ") + "이대로 갤러리에 내려받을까요?",
             fontSize = 15.sp, color = Tds.Grey600, modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 8.dp),
         )
+        Segmented(
+            listOf("게시물 · 사진 ${deck.slides.size}장", "릴스 · 영상 1개"), if (reel) 1 else 0,
+            { onReel(it == 1) }, Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+        )
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().background(Tds.Grey100).padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
-            // Room for the post's name row above and the buttons and dots below.
-            val slideW = minOf(maxWidth - 32.dp, (maxHeight - 112.dp) * 0.8f)
-            InstagramPost(deck, pager, slideW)
+            if (reel) {
+                val slideW = minOf(maxWidth - 32.dp, (maxHeight - 28.dp) * (9f / 16f))
+                ReelPreview(deck, pager, slideW)
+            } else {
+                // Room for the post's name row above and the buttons and dots below.
+                val slideW = minOf(maxWidth - 32.dp, (maxHeight - 112.dp) * 0.8f)
+                InstagramPost(deck, pager, slideW)
+            }
         }
         // Said before it happens, with a switch, so nothing leaves the gallery by surprise.
         if (originals > 0 && android.os.Build.VERSION.SDK_INT >= 30) Row(
@@ -991,7 +1015,7 @@ fun SaveSheet(
         }
         Column(Modifier.padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = onDownload, modifier = Modifier.fillMaxWidth().height(CtaHeight)) {
-                Text("갤러리에 내려받기 (${deck.slides.size}장)", fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                Text(if (reel) "릴스 영상으로 내려받기 (${clock(Video.reelMs(deck))})" else "갤러리에 내려받기 (${deck.slides.size}장)", fontSize = 17.sp, fontWeight = FontWeight.Bold)
             }
             WeakButton("계속 고치기", onClose, Modifier.fillMaxWidth().height(CtaHeight))
         }
@@ -1048,6 +1072,57 @@ private fun InstagramPost(deck: Deck, pager: PagerState, slideW: Dp) {
                     moveTo(0.2f * w, 0.08f * w); lineTo(0.8f * w, 0.08f * w); lineTo(0.8f * w, 0.92f * w); lineTo(0.5f * w, 0.66f * w); lineTo(0.2f * w, 0.92f * w); close()
                 }
             }
+        }
+    }
+}
+
+/**
+ * A rough full-screen reel: the slides at 9:16, with Instagram's name, caption and side buttons
+ * where they sit, so it's clear what they cover. Swipe to see each part; the video plays them in order.
+ */
+@Composable
+private fun ReelPreview(deck: Deck, pager: PagerState, slideW: Dp) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(Modifier.width(slideW).height(slideW * (16f / 9f)).clip(RoundedCornerShape(12.dp)).background(Color.Black)) {
+            HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()) { i ->
+                SlideCanvas(deck.slides[i], null, Modifier.width(slideW), description = "릴스 ${i + 1}번째 장면", aspect = 9f / 16f)
+            }
+            Column(Modifier.align(Alignment.BottomEnd).padding(end = 10.dp, bottom = slideW * 0.3f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                PostIcon(Color.White) { w ->
+                    moveTo(0.5f * w, 0.88f * w); cubicTo(0.1f * w, 0.6f * w, 0.02f * w, 0.4f * w, 0.1f * w, 0.24f * w)
+                    cubicTo(0.2f * w, 0.06f * w, 0.42f * w, 0.08f * w, 0.5f * w, 0.26f * w)
+                    cubicTo(0.58f * w, 0.08f * w, 0.8f * w, 0.06f * w, 0.9f * w, 0.24f * w)
+                    cubicTo(0.98f * w, 0.4f * w, 0.9f * w, 0.6f * w, 0.5f * w, 0.88f * w); close()
+                }
+                PostIcon(Color.White) { w -> addOval(androidx.compose.ui.geometry.Rect(0.08f * w, 0.1f * w, 0.92f * w, 0.9f * w)) }
+                PostIcon(Color.White) { w -> moveTo(0.06f * w, 0.14f * w); lineTo(0.94f * w, 0.14f * w); lineTo(0.48f * w, 0.92f * w); lineTo(0.4f * w, 0.44f * w); close() }
+            }
+            Row(Modifier.align(Alignment.BottomStart).padding(start = 12.dp, bottom = slideW * 0.12f), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(24.dp).background(Tds.Grey300, CircleShape))
+                Text("내 계정", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White, modifier = Modifier.padding(start = 8.dp))
+            }
+        }
+        Text(
+            "장면 ${pager.currentPage + 1}/${deck.slides.size} · 모두 이어서 ${clock(Video.reelMs(deck))}",
+            fontSize = 13.sp, color = Tds.Grey600, modifier = Modifier.padding(top = 8.dp),
+        )
+    }
+}
+
+/** Toss-style segmented control: a grey track, the chosen side lifted in white. */
+@Composable
+private fun Segmented(options: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
+    Row(modifier.fillMaxWidth().height(40.dp).background(Tds.Grey100, RoundedCornerShape(10.dp)).padding(3.dp)) {
+        options.forEachIndexed { i, label ->
+            val on = i == selected
+            Box(
+                Modifier.weight(1f).fillMaxHeight()
+                    .then(if (on) Modifier.shadow(1.dp, RoundedCornerShape(8.dp)).background(Tds.White, RoundedCornerShape(8.dp)) else Modifier)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onSelect(i) }
+                    .semantics { contentDescription = label + if (on) ", 선택됨" else "" },
+                contentAlignment = Alignment.Center,
+            ) { Text(label, fontSize = 14.sp, fontWeight = if (on) FontWeight.Bold else FontWeight.Medium, color = if (on) Tds.Grey900 else Tds.Grey600) }
         }
     }
 }
@@ -1244,15 +1319,15 @@ private fun DrawScope.drawGlyph(g: Glyph, c: Color, centre: Offset? = null, w: F
 // ───────────────────────────── Saving ─────────────────────────────
 
 @Composable
-private fun ExportingScreen(done: Int, total: Int, video: Boolean) {
+private fun ExportingScreen(done: Int, total: Int, video: Boolean, reel: Boolean = false) {
     Column(
         Modifier.fillMaxSize().background(Tds.White).clickable(remember { MutableInteractionSource() }, null) {}.padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Text(if (video) "사진과 동영상을 만들고 있어요" else "사진을 만들고 있어요", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Tds.Grey900)
+        Text(if (reel) "릴스 영상을 만들고 있어요" else if (video) "사진과 동영상을 만들고 있어요" else "사진을 만들고 있어요", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Tds.Grey900)
         // Encoding a video takes a while; say so, so a slow bar doesn't look stuck.
-        if (video) Text("동영상은 길이만큼 시간이 걸려요. 앱을 켜 둔 채로 기다려 주세요", fontSize = 14.sp, color = Tds.Grey600, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
+        if (video || reel) Text("동영상은 길이만큼 시간이 걸려요. 앱을 켜 둔 채로 기다려 주세요", fontSize = 14.sp, color = Tds.Grey600, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
         Text("$done / $total", fontSize = 40.sp, fontWeight = FontWeight.Bold, color = Tds.Blue700, modifier = Modifier.padding(vertical = 16.dp))
         LinearProgressIndicator(
             progress = { if (total == 0) 0f else done / total.toFloat() }, color = Tds.Blue500, trackColor = Tds.Grey200,
@@ -1263,14 +1338,14 @@ private fun ExportingScreen(done: Int, total: Int, video: Boolean) {
 
 /** Toss-style result: a drawn check, one sentence, the next two things people do. */
 @Composable
-fun DoneScreen(count: Int, onGallery: () -> Unit, onNew: () -> Unit, onClose: () -> Unit, note: String? = null) {
+fun DoneScreen(count: Int, onGallery: () -> Unit, onNew: () -> Unit, onClose: () -> Unit, note: String? = null, reel: Boolean = false) {
     BackHandler(onBack = onClose)
     Column(Modifier.fillMaxSize().background(Tds.White).clickable(remember { MutableInteractionSource() }, null) {}.padding(20.dp)) {
         IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "닫기", tint = Tds.Grey700) }
         Column(Modifier.weight(1f).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
             DrawnCheck(Modifier.size(72.dp))
-            Text("${count}장을 갤러리에 내려받았어요", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Tds.Grey900, modifier = Modifier.padding(top = 20.dp))
-            Text("인스타그램에서 순서대로 고르면 캐러셀이 돼요", fontSize = 15.sp, color = Tds.Grey600, modifier = Modifier.padding(top = 6.dp))
+            Text(if (reel) "릴스 영상을 갤러리에 내려받았어요" else "${count}장을 갤러리에 내려받았어요", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Tds.Grey900, modifier = Modifier.padding(top = 20.dp))
+            Text(if (reel) "인스타그램 릴스에서 이 영상 하나만 고르면 돼요" else "인스타그램에서 순서대로 고르면 캐러셀이 돼요", fontSize = 15.sp, color = Tds.Grey600, modifier = Modifier.padding(top = 6.dp))
             if (note != null) Text(note, fontSize = 14.sp, color = Tds.Grey700, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 16.dp, start = 12.dp, end = 12.dp))
         }
         Button(onClick = onGallery, modifier = Modifier.fillMaxWidth().height(CtaHeight)) {
