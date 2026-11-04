@@ -410,6 +410,10 @@ fun EditorScreen(
                 .onSuccess {
                     saved = it; reviewing = false
                     withContext(Dispatchers.IO) { Checks.markUsed(context, used) }
+                    // Downloaded means done: the editor starts empty for the next one.
+                    part = null; tool = Tool.None
+                    onNew()
+                    pager.scrollToPage(0)
                     doneNote = null
                     if (trashAfter && used.isNotEmpty() && android.os.Build.VERSION.SDK_INT >= 30) {
                         // One system confirmation for all of them; the trash keeps them 30 days.
@@ -601,7 +605,7 @@ fun EditorScreen(
                 count = uris.size,
                 note = doneNote,
                 onGallery = { onOpenGallery(uris) },
-                onNew = { saved = null; doneNote = null; onNew(); scope.launch { pager.scrollToPage(0) } },
+                onNew = { saved = null; doneNote = null },
                 onClose = { saved = null },
             )
         }
