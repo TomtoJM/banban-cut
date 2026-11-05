@@ -81,8 +81,11 @@ object Checks {
     /**
      * Puts the clips into the bottom spots, one per slide in order: first the slides whose bottom
      * is empty, then new slides. Each clip sits centred at zoom 1, which fills the spot exactly,
-     * with the todo's name as its words.
+     * with no words; the todo's name goes on the same slide's top spot (unless it has words).
      */
+    /** How much an action spot is darkened at first, so white words read over a bright photo. */
+    const val ACTION_DIM = 0.25f
+
     fun fill(deck: Deck, clips: List<CheckClip>, style: Frame): Deck {
         val slides = deck.slides.toMutableList()
         var i = 0
@@ -94,7 +97,11 @@ object Checks {
                 slides += Slide(top = blank, bottom = blank)
             }
             val s = slides[i]
-            slides[i] = s.copy(bottom = s.bottom.copy(uri = clip.uri, zoom = 1f, x = 0f, y = 0f, durationMs = clip.durationMs, text = clip.title))
+            // The todo's name goes on the top spot, where the real thing will be shown, with a
+            // little darkening so the words read over any photo; the check video stays wordless.
+            val top = if (s.top.text.isNotBlank()) s.top else s.top.copy(text = clip.title, dim = maxOf(s.top.dim, ACTION_DIM))
+            val app = s.bottom.copy(uri = clip.uri, zoom = 1f, x = 0f, y = 0f, durationMs = clip.durationMs, text = "", check = true)
+            slides[i] = s.copy(top = top, bottom = app)
             i++
         }
         return deck.copy(slides = slides)

@@ -370,10 +370,13 @@ fun EditorScreen(
         val to = spots.getOrNull(from + by) ?: return
         val a = current.slides[page].frame(p)
         val b = current.slides[to.first].frame(to.second)
-        fun photoOf(src: Frame, into: Frame) = into.copy(uri = src.uri, zoom = src.zoom, x = src.x, y = src.y, dim = src.dim, durationMs = src.durationMs)
+        fun photoOf(src: Frame, into: Frame) = into.copy(uri = src.uri, zoom = src.zoom, x = src.x, y = src.y, dim = src.dim, durationMs = src.durationMs, check = src.check)
         val slides = current.slides.toMutableList()
         slides[page] = slides[page].with(p, photoOf(b, a))
         slides[to.first] = slides[to.first].with(to.second, photoOf(a, slides[to.first].frame(to.second)))
+        // The todo's name keeps to the real thing, never the check video.
+        slides[page] = slides[page].wordsToAction()
+        slides[to.first] = slides[to.first].wordsToAction()
         change(current.copy(slides = slides))
         focus(to.first, to.second)
     }
@@ -916,7 +919,24 @@ fun SlideCanvas(
         @Suppress("UNUSED_EXPRESSION") loaded // redraw when a photo arrives
         drawIntoCanvas { Art.draw(it.nativeCanvas, slide, size.width, size.height, face, photo = Photos::peek) }
         slide.frames.forEachIndexed { p, f ->
-            if (f.uri == null) {
+            if (f.uri == null && f.text.isNotBlank()) {
+                // Words already waiting: show them as they'll look, and a small "add" below them.
+                val r = Art.area(slide, p, size.width, size.height)
+                val label = "사진·영상 넣기"
+                val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                    textSize = 13.dp.toPx(); color = android.graphics.Color.WHITE; typeface = android.graphics.Typeface.DEFAULT_BOLD
+                }
+                val icon = 14.dp.toPx()
+                val padX = 12.dp.toPx()
+                val w = padX * 2 + icon + 6.dp.toPx() + paint.measureText(label)
+                val h = 32.dp.toPx()
+                val left = r.centerX() - w / 2
+                val top = r.bottom - h - minOf(r.height() * 0.1f, 20.dp.toPx())
+                drawRoundRect(Color.Black.copy(alpha = 0.35f), Offset(left, top), Size(w, h), CornerRadius(h / 2))
+                drawRoundRect(Color.White.copy(alpha = 0.6f), Offset(left, top), Size(w, h), CornerRadius(h / 2), style = Stroke(1.dp.toPx()))
+                drawGlyph(Glyph.Add, Color.White, Offset(left + padX + icon / 2, top + h / 2), icon)
+                drawIntoCanvas { it.nativeCanvas.drawText(label, left + padX + icon + 6.dp.toPx(), top + h / 2 - (paint.ascent() + paint.descent()) / 2, paint) }
+            } else if (f.uri == null) {
                 // An empty spot reads as "put a photo here".
                 val r = Art.area(slide, p, size.width, size.height)
                 val d = minOf(r.width(), r.height()) * 0.22f

@@ -25,18 +25,23 @@ data class Frame(
     val textY: Float = 0.5f,
     /** How long the clip is when [uri] is a video; 0 for a photo. */
     val durationMs: Long = 0L,
+    /**
+     * An Atomic ToDoList check video: the app at work. It carries no words; the todo's name goes
+     * on the other spot of its slide, where the real thing being done is shown.
+     */
+    val check: Boolean = false,
 ) {
     val isVideo get() = durationMs > 0
 
     /** The spot with its photo or video taken out; the words stay. */
-    fun emptied() = copy(uri = null, zoom = 1f, x = 0f, y = 0f, durationMs = 0L)
+    fun emptied() = copy(uri = null, zoom = 1f, x = 0f, y = 0f, durationMs = 0L, check = false)
 
     fun toJson(): JSONObject = JSONObject()
         .put("uri", uri?.toString()).put("text", text)
         .put("zoom", zoom.toDouble()).put("x", x.toDouble()).put("y", y.toDouble())
         .put("dim", dim.toDouble()).put("size", textSize.toDouble())
         .put("textX", textX.toDouble()).put("textY", textY.toDouble())
-        .put("video", durationMs)
+        .put("video", durationMs).put("check", check)
 
     companion object {
         const val TEXT_SIZE = 0.065f
@@ -55,6 +60,7 @@ data class Frame(
             textX = o.optDouble("textX", 0.5).toFloat(),
             textY = o.optDouble("textY", 0.5).toFloat(),
             durationMs = o.optLong("video", 0L),
+            check = o.optBoolean("check", false),
         )
     }
 }
@@ -73,6 +79,19 @@ data class Slide(
 
     fun with(part: Int, f: Frame) = if (part == 0) copy(top = f) else copy(bottom = f)
     fun frame(part: Int) = if (part == 0) top else bottom
+
+    /**
+     * Words belong on the spot showing the real thing, not on the check video. When a swap leaves
+     * them on the check video and the other spot has none, they move across with their placing.
+     */
+    fun wordsToAction(): Slide {
+        if (layout != Layout.Halves || top.check == bottom.check) return this
+        val (app, act) = if (top.check) top to bottom else bottom to top
+        if (app.text.isBlank() || act.text.isNotBlank()) return this
+        val moved = act.copy(text = app.text, textX = app.textX, textY = app.textY, textSize = app.textSize)
+        val cleared = app.copy(text = "")
+        return if (top.check) copy(top = cleared, bottom = moved) else copy(top = moved, bottom = cleared)
+    }
 
     /**
      * How long this slide plays when it has a video: the shortest clip on it, so neither half
