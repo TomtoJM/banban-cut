@@ -72,6 +72,11 @@ dependencies {
     implementation("androidx.media3:media3-transformer:1.8.0")
     implementation("androidx.media3:media3-effect:1.8.0")
     implementation("androidx.media3:media3-common:1.8.0")
+    // The in-app camera that films a spot for exactly as long as its check video.
+    implementation("androidx.camera:camera-camera2:1.4.2")
+    implementation("androidx.camera:camera-lifecycle:1.4.2")
+    implementation("androidx.camera:camera-video:1.4.2")
+    implementation("androidx.camera:camera-view:1.4.2")
 
     // Screenshots of the screens, rendered on CI (see ScreenshotTest).
     testImplementation("junit:junit:4.13.2")

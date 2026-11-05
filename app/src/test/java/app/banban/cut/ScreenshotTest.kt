@@ -145,6 +145,17 @@ class ScreenshotTest {
         shoot("13-review-reel")
     }
 
+    @Test fun camera() {
+        compose.setContent { Themed { ClipCamera(2_400, 8f / 5f, { _, _ -> }, {}, sample = true) } }
+        shoot("16-camera")
+    }
+
+    @Test fun cameraReel() {
+        val d = deck.copy(reel = true)
+        compose.setContent { Themed { ClipCamera(Shot.lengthFor(d, 0, 0), Shot.aspectFor(d, 0, 0), { _, _ -> }, {}, sample = true) } }
+        shoot("17-camera-reel")
+    }
+
     @Test fun editorReel() {
         compose.setContent { Themed { Editor(d = deck.copy(reel = true)) } }
         shoot("14-editor-reel")

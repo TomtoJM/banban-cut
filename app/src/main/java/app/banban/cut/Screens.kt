@@ -616,7 +616,10 @@ fun EditorScreen(
             onDownload = ::download, onClose = { reviewing = false },
         )
         picking?.let { from ->
-            MediaPicker(deck, gallery, onDone = { picking = null; place(it, from) }, onClose = { picking = null })
+            MediaPicker(
+                deck, gallery, onDone = { picking = null; place(it, from) }, onClose = { picking = null },
+                lengthMs = Shot.lengthFor(deck, from.first, from.second), aspect = Shot.aspectFor(deck, from.first, from.second),
+            )
         }
         exporting?.let { n -> ExportingScreen(n, deck.slides.size, deck.slides.any { it.clipMs != null }, deck.reel) }
         saved?.let { uris ->
