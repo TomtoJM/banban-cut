@@ -177,6 +177,27 @@ class ScreenshotTest {
         shoot("9-checks-in")
     }
 
+    @Test fun checksInReel() {
+        val photo = uri(4)
+        val d = Checks.fill(Deck(listOf(Slide()), reel = true), clips, Frame()).let { it.copy(slides = it.slides.mapIndexed { i, s -> if (i == 0) s.copy(bottom = s.bottom.copy(uri = photo)) else s }) }
+        compose.setContent { Themed { Editor(d = d) } }
+        shoot("9b-checks-in-reel")
+    }
+
+    @Test fun checksInReelSelected() {
+        val photo = uri(4)
+        val d = Checks.fill(Deck(listOf(Slide()), reel = true), clips, Frame()).let { it.copy(slides = it.slides.mapIndexed { i, s -> if (i == 0) s.copy(bottom = s.bottom.copy(uri = photo)) else s }) }
+        compose.setContent { Themed { Editor(d = d, part = 1) } }
+        shoot("9c-checks-reel-guide")
+    }
+
+    @Test fun checksInPost() {
+        val photo = uri(4)
+        val d = Checks.fill(Deck(listOf(Slide())), clips, Frame()).let { it.copy(slides = it.slides.mapIndexed { i, s -> if (i == 0) s.copy(bottom = s.bottom.copy(uri = photo)) else s }) }
+        compose.setContent { Themed { Editor(d = d) } }
+        shoot("9d-checks-in-post")
+    }
+
     @Test fun picker() {
         val d = Checks.fill(Deck(listOf(Slide())), clips, Frame())
         compose.setContent { Themed { Editor(d = d, picker = 0 to 0) } }
