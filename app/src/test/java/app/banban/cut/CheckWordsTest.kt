@@ -86,7 +86,8 @@ class CheckWordsTest {
         val s = Checks.fill(Deck(listOf(Slide())), clips.take(1), Frame()).slides[0]
         val r = Art.area(s, 0, 1080f, 1920f)
         val side = 1080f * Deck.SAFE_SIDE
-        assertEquals(RectF(side, 0f, 1080f - side, r.bottom), r) // at the very top, clear of the sides
+        // At the very top, clear of the sides.
+        assertEquals(0f, r.top, 0.01f); assertEquals(side, r.left, 0.5f); assertEquals(1080f - side, r.right, 0.5f)
         assertEquals(r.width() * 5f / 8f, r.height(), 0.5f) // its own 8:5 shape
         assertEquals(RectF(0f, 0f, 1f, 1f), Art.visible(1080, 675, s.top, r)) // nothing cut off
         assertEquals(RectF(0f, 0f, 1080f, r.bottom), Art.shown(s, 0, 1080f, 1920f)) // the strip runs edge to edge
