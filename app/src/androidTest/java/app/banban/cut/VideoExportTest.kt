@@ -118,4 +118,28 @@ class VideoExportTest {
             }
         } finally { r.release() }
     }
+
+    /** Check video on top (all of it), the real thing below with the todo's name: post and reel. */
+    @Test fun checkOnTop() = runBlocking {
+        val chk = clip("check.mp4", 2400)
+        val land = clip("land.mp4", 5000)
+        fun slide(action: Frame) = Slide(top = Frame(chk, durationMs = 2400, check = true, ratio = 0.625f), bottom = action.copy(dim = 0.25f))
+        val post = slide(Frame(photo(), "Research 5 companies"))
+        check("6-check-post", post, 2400)
+        val deck = Deck(listOf(post, slide(Frame(photo(), "Go for a run")), slide(Frame(land, "Write the letter", durationMs = 5000))), reel = true)
+        val file = File(out, "7-check-reel.mp4")
+        Video.reel(app, deck, Art.typeface(app), file) {}
+        val r = MediaMetadataRetriever()
+        try {
+            r.setDataSource(file.path)
+            val ms = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)!!.toLong()
+            println("VIDEOCHECK 7-check-reel: ${r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)}x${r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)} ${ms}ms")
+            assertTrue("length $ms", kotlin.math.abs(ms - 7200) < 900)
+            listOf(1_000L, 6_000L).forEachIndexed { k, at ->
+                r.getFrameAtTime(at * 1000, MediaMetadataRetriever.OPTION_CLOSEST)!!.let { frame ->
+                    File(out, "7-check-reel-${k + 1}.png").outputStream().use { frame.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                }
+            }
+        } finally { r.release() }
+    }
 }

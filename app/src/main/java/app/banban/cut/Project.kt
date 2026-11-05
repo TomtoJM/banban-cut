@@ -30,21 +30,29 @@ data class Frame(
      * on the other spot of its slide, where the real thing being done is shown.
      */
     val check: Boolean = false,
+    /** A check video's height over width (8:5 → 0.625), so its spot can show all of it. 0 = 0.625. */
+    val ratio: Float = 0f,
 ) {
     val isVideo get() = durationMs > 0
 
     /** The spot with its photo or video taken out; the words stay. */
-    fun emptied() = copy(uri = null, zoom = 1f, x = 0f, y = 0f, durationMs = 0L, check = false)
+    fun emptied() = copy(uri = null, zoom = 1f, x = 0f, y = 0f, durationMs = 0L, check = false, ratio = 0f)
+
+    /** Height over width of this check video. */
+    val checkRatio get() = if (ratio > 0f) ratio else CHECK_RATIO
 
     fun toJson(): JSONObject = JSONObject()
         .put("uri", uri?.toString()).put("text", text)
         .put("zoom", zoom.toDouble()).put("x", x.toDouble()).put("y", y.toDouble())
         .put("dim", dim.toDouble()).put("size", textSize.toDouble())
         .put("textX", textX.toDouble()).put("textY", textY.toDouble())
-        .put("video", durationMs).put("check", check)
+        .put("video", durationMs).put("check", check).put("ratio", ratio.toDouble())
 
     companion object {
         const val TEXT_SIZE = 0.065f
+
+        /** Atomic ToDoList's check videos: 1080×675, 8:5. */
+        const val CHECK_RATIO = 5f / 8f
         val TEXT_SIZES = 0.04f..0.12f
 
         fun fromJson(o: JSONObject?) = if (o == null) Frame() else Frame(
@@ -61,6 +69,7 @@ data class Frame(
             textY = o.optDouble("textY", 0.5).toFloat(),
             durationMs = o.optLong("video", 0L),
             check = o.optBoolean("check", false),
+            ratio = o.optDouble("ratio", 0.0).toFloat(),
         )
     }
 }

@@ -66,20 +66,53 @@ object Art {
         Typeface.Builder(context.assets, "fonts/Montserrat.ttf").setFontVariationSettings("'wght' 700").build()
     }.getOrDefault(Typeface.DEFAULT_BOLD).also { typeface = it }
 
-    /** The area of [part] on a slide of the given size. */
-    fun area(slide: Slide, part: Int, w: Float, h: Float): RectF =
-        if (slide.layout == Layout.Single) RectF(0f, 0f, w, h)
-        else if (part == 0) RectF(0f, 0f, w, h / 2) else RectF(0f, h / 2, w, h)
+    /**
+     * The area of [part] on a slide of the given size: what its photo or video is cropped to.
+     *
+     * A reel whose top spot is an Atomic ToDoList check video is laid out differently: the check
+     * video gets its own shape at full width (1080×675 for 8:5), so none of the app's screen is cut
+     * off, and it starts where Instagram's top bar ends so the app's date line stays in sight. The
+     * real-thing spot fills the whole reel behind it; what shows of it is the strip above (under
+     * Instagram's bar anyway) and everything below. See [shown].
+     */
+    fun area(slide: Slide, part: Int, w: Float, h: Float): RectF {
+        if (slide.layout == Layout.Single) return RectF(0f, 0f, w, h)
+        band(slide, w, h)?.let { band -> return if (part == 0) band else RectF(0f, 0f, w, h) }
+        return if (part == 0) RectF(0f, 0f, w, h / 2) else RectF(0f, h / 2, w, h)
+    }
+
+    /** Where the part can be seen: its area, less the check video lying over it. Words, buttons and taps go by this. */
+    fun shown(slide: Slide, part: Int, w: Float, h: Float): RectF {
+        val band = band(slide, w, h) ?: return area(slide, part, w, h)
+        return if (part == 0) band else RectF(0f, band.bottom, w, h)
+    }
+
+    /** Which part is at a point. */
+    fun partAt(slide: Slide, y: Float, w: Float, h: Float): Int =
+        if (slide.layout == Layout.Single) 0
+        else if (shown(slide, 0, w, h).let { y >= it.top && y < it.bottom }) 0
+        else if (band(slide, w, h) == null && y < h / 2) 0 else 1
+
+    /** The check video's spot in a reel (top spot only, so slides made before keep their halves). */
+    private fun band(slide: Slide, w: Float, h: Float): RectF? {
+        if (slide.layout != Layout.Halves || !slide.top.check || slide.bottom.check || h <= w * 1.6f) return null
+        val top = h * REEL_TOP
+        return RectF(0f, top, w, top + w * slide.top.checkRatio)
+    }
 
     /**
      * With [overVideo], a video's spot is left clear (only its darkening and words are drawn), so
      * the picture can sit on top of the moving video when a slide is saved as a video.
      */
     fun draw(canvas: Canvas, slide: Slide, w: Float, h: Float, typeface: Typeface, overVideo: Boolean = false, photo: (Uri) -> Bitmap?) {
-        slide.frames.forEachIndexed { part, frame ->
+        // A check video lying over the real-thing spot is drawn last, on top.
+        val order = if (band(slide, w, h) != null) listOf(1, 0) else slide.frames.indices.toList()
+        for (part in order) {
+            val frame = slide.frame(part)
             val r = area(slide, part, w, h)
             canvas.save()
             canvas.clipRect(r)
+            if (overVideo && frame.isVideo) canvas.drawColor(Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR)
             val bmp = if (overVideo && frame.isVideo) null else frame.uri?.let(photo)
             if (bmp != null) drawPhoto(canvas, bmp, frame, r) else if (!(overVideo && frame.isVideo)) canvas.drawColor(EMPTY)
             if (frame.dim > 0f) canvas.drawColor(Color.argb((frame.dim * 255).toInt(), 0, 0, 0))
@@ -130,7 +163,7 @@ object Art {
     fun words(slide: Slide, part: Int, w: Float, h: Float, typeface: Typeface): Pair<StaticLayout, RectF>? {
         val f = slide.frame(part)
         if (f.text.isBlank()) return null
-        val r = area(slide, part, w, h)
+        val r = shown(slide, part, w, h)
         val bounds = RectF(r).apply { if (!intersect(safe(w, h))) set(r) }
         val size = w * f.textSize
         val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {

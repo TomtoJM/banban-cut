@@ -3,6 +3,7 @@ package app.banban.cut
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.RectF
 import android.net.Uri
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.getValue
@@ -35,63 +36,104 @@ class CheckWordsTest {
         CheckClip(Uri.parse("content://media/external/video/media/${200 + i}"), t, 2_400, "c$i|1")
     }
 
+    private val face get() = Art.typeface(RuntimeEnvironment.getApplication())
+
+    private fun photo(n: Int, color: Int): Uri = Uri.parse("content://p/$n").also {
+        Photos.put(it, Bitmap.createBitmap(1200, 900, Bitmap.Config.ARGB_8888).apply { eraseColor(color) })
+    }
+
     @Test fun twoClipsTwoSlides() {
         val d = Checks.fill(Deck(listOf(Slide())), clips, Frame())
         assertEquals(2, d.slides.size)
         d.slides.forEachIndexed { i, s ->
-            assertEquals(clips[i].title, s.top.text)
-            assertEquals("", s.bottom.text)
-            assertTrue(s.bottom.check)
-            assertEquals(clips[i].uri, s.bottom.uri)
-            assertNull(s.top.uri)
-            assertEquals(Checks.ACTION_DIM, s.top.dim)
+            assertEquals(clips[i].uri, s.top.uri)
+            assertTrue(s.top.check)
+            assertEquals("", s.top.text)
+            assertEquals(clips[i].title, s.bottom.text)
+            assertNull(s.bottom.uri)
+            assertEquals(Checks.ACTION_DIM, s.bottom.dim)
         }
     }
 
     @Test fun oldSlidesAreLeftAlone() {
-        // Made before: words on the check video. Nothing changes them behind the user's back.
-        val old = Slide(top = Frame(Uri.parse("content://p/1")), bottom = Frame(clips[0].uri, "Research 5 companies", durationMs = 2_400))
+        // Made by v53: words on the top photo, check video below. Nothing changes them behind the user's back.
+        val old = Slide(top = Frame(Uri.parse("content://p/1"), "Research 5 companies"), bottom = Frame(clips[0].uri, durationMs = 2_400, check = true))
         val d = Checks.fill(Deck(listOf(old)), clips.take(1), Frame())
-        assertEquals("Research 5 companies", d.slides[0].bottom.text)
-        assertEquals("", d.slides[0].top.text)
-        assertEquals(d.slides[0], d.slides[0].wordsToAction()) // no check flag on old slides
-        assertEquals(2, d.slides.size) // the new clip went on a new slide, the new way
-        assertEquals("Research 5 companies", d.slides[1].top.text)
+        assertEquals(old, d.slides[0])
+        // Its reel layout stays two equal halves too.
+        assertEquals(RectF(0f, 960f, 1080f, 1920f), Art.area(old, 1, 1080f, 1920f))
+        assertEquals(2, d.slides.size)
+        assertEquals(clips[0].uri, d.slides[1].top.uri)
     }
 
     @Test fun swapKeepsWordsOnTheRealThing() {
         val s = Checks.fill(Deck(listOf(Slide())), clips.take(1), Frame()).slides[0]
-        // The check video moved to the top, the words left behind on what is now the check spot.
-        val swapped = s.copy(top = s.top.copy(uri = s.bottom.uri, durationMs = 2_400, check = true), bottom = s.bottom.copy(uri = null, durationMs = 0, check = false))
+        val swapped = s.copy(bottom = s.bottom.copy(uri = s.top.uri, durationMs = 2_400, check = true), top = s.top.copy(uri = null, durationMs = 0, check = false))
             .wordsToAction()
-        assertEquals("", swapped.top.text)
-        assertEquals("Research 5 companies", swapped.bottom.text)
+        assertEquals("", swapped.bottom.text)
+        assertEquals("Research 5 companies", swapped.top.text)
     }
 
-    @Test fun savedPictureHasWordsOnTopOnly() {
-        val photo = Uri.parse("content://p/9")
-        Photos.put(photo, Bitmap.createBitmap(1200, 900, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.rgb(90, 120, 80)) })
-        val s = Checks.fill(Deck(listOf(Slide())), clips.take(1), Frame()).slides[0].let { it.copy(top = it.top.copy(uri = photo)) }
-        val face = Art.typeface(RuntimeEnvironment.getApplication())
+    @Test fun postSpotsShowTheWholeCheckVideo() {
+        val s = Checks.fill(Deck(listOf(Slide())), clips.take(1), Frame()).slides[0]
         val w = Deck.WIDTH.toFloat(); val h = Deck.HEIGHT.toFloat()
-        assertNotNull(Art.words(s, 0, w, h, face))
-        assertNull(Art.words(s, 1, w, h, face))
-        val bmp = Bitmap.createBitmap(Deck.WIDTH, Deck.HEIGHT, Bitmap.Config.ARGB_8888)
-        Art.draw(Canvas(bmp), s, w, h, face, overVideo = true) { Photos.peek(it) }
-        fun white(y0: Int, y1: Int) = (y0 until y1 step 4).any { y -> (0 until Deck.WIDTH step 4).any { x -> bmp.getPixel(x, y).let { Color.red(it) > 240 && Color.green(it) > 240 && Color.blue(it) > 240 } } }
-        assertTrue("words on the top half", white(0, Deck.HEIGHT / 2))
-        assertFalse("nothing written over the check video", white(Deck.HEIGHT / 2, Deck.HEIGHT))
+        val r = Art.area(s, 0, w, h)
+        assertEquals(RectF(0f, 0f, w, h / 2), r)
+        assertEquals(RectF(0f, 0f, 1f, 1f), Art.visible(1080, 675, s.top, r)) // nothing cut off
     }
 
-    @Test fun addingAPhotoKeepsTheWords() {
-        val photo = Uri.parse("content://sample/1")
-        Photos.put(photo, Bitmap.createBitmap(1200, 900, Bitmap.Config.ARGB_8888))
-        var deck by mutableStateOf(Checks.fill(Deck(listOf(Slide())), clips.take(1), Frame()))
-        compose.setContent { BanbanTheme { Surface { EditorScreen(deck, { deck = it }, UpdateState.Latest, {}, {}, {}, {}, {}, {}, listOf(photo), startChecks = emptyList()) } } }
+    @Test fun reelCheckSpotIsFullWidthAtItsOwnShape() {
+        val s = Checks.fill(Deck(listOf(Slide())), clips.take(1), Frame()).slides[0]
+        val r = Art.area(s, 0, 1080f, 1920f)
+        assertEquals(1080f, r.width(), 0.5f)
+        assertEquals(675f, r.height(), 0.5f) // width × 5/8
+        assertEquals(1920f * 0.155f, r.top, 0.5f) // starts below Instagram's top bar
+        assertEquals(RectF(0f, 0f, 1f, 1f), Art.visible(1080, 675, s.top, r))
+        assertEquals(RectF(0f, r.bottom, 1080f, 1920f), Art.shown(s, 1, 1080f, 1920f))
+        // An older 9:8 check video: its spot follows its own shape.
+        val tall = s.copy(top = s.top.copy(ratio = 8f / 9f))
+        assertEquals(960f, Art.area(tall, 0, 1080f, 1920f).height(), 0.5f)
+        // Words sit below the check video and above Instagram's caption.
+        val box = Art.words(s, 1, 1080f, 1920f, face)!!.second
+        assertTrue("words at ${box.top}", box.top >= r.bottom && box.bottom <= 1920f * (1 - 0.234f))
+    }
+
+    private fun white(bmp: Bitmap, y0: Int, y1: Int) = (y0 until y1 step 3).any { y ->
+        (0 until bmp.width step 3).any { x -> bmp.getPixel(x, y).let { Color.alpha(it) > 250 && Color.red(it) > 240 && Color.green(it) > 240 && Color.blue(it) > 240 } }
+    }
+
+    @Test fun savedPostHasWordsOnTheBottomOnly() {
+        val s = Checks.fill(Deck(listOf(Slide())), clips.take(1), Frame()).slides[0].let { it.copy(bottom = it.bottom.copy(uri = photo(9, Color.rgb(90, 120, 80)))) }
+        val bmp = Bitmap.createBitmap(Deck.WIDTH, Deck.HEIGHT, Bitmap.Config.ARGB_8888)
+        Art.draw(Canvas(bmp), s, Deck.WIDTH.toFloat(), Deck.HEIGHT.toFloat(), face, overVideo = true) { Photos.peek(it) }
+        assertFalse("nothing written over the check video", white(bmp, 0, Deck.HEIGHT / 2))
+        assertTrue("words on the bottom half", white(bmp, Deck.HEIGHT / 2, Deck.HEIGHT))
+        assertEquals("check spot left clear for the video", 0, Color.alpha(bmp.getPixel(540, 300)))
+    }
+
+    @Test fun savedReelLeavesTheCheckBandClear() {
+        val s = Checks.fill(Deck(listOf(Slide())), clips.take(1), Frame()).slides[0].let { it.copy(bottom = it.bottom.copy(uri = photo(8, Color.rgb(90, 120, 80)))) }
+        val bmp = Bitmap.createBitmap(1080, 1920, Bitmap.Config.ARGB_8888)
+        Art.draw(Canvas(bmp), s, 1080f, 1920f, face, overVideo = true) { Photos.peek(it) }
+        val band = Art.area(s, 0, 1080f, 1920f)
+        assertEquals("photo above the check video", 255, Color.alpha(bmp.getPixel(540, (band.top / 2).toInt())))
+        assertEquals("check band clear", 0, Color.alpha(bmp.getPixel(540, band.centerY().toInt())))
+        assertEquals("photo below", 255, Color.alpha(bmp.getPixel(540, (band.bottom + 100).toInt())))
+        assertFalse(white(bmp, band.top.toInt(), band.bottom.toInt()))
+        assertTrue(white(bmp, band.bottom.toInt(), 1920))
+    }
+
+    @Test fun twoClipsTwoPhotos() {
+        val a = photo(1, Color.rgb(120, 90, 80)); val b = photo(2, Color.rgb(80, 90, 120))
+        var deck by mutableStateOf(Checks.fill(Deck(listOf(Slide())), clips, Frame()))
+        compose.setContent { BanbanTheme { Surface { EditorScreen(deck, { deck = it }, UpdateState.Latest, {}, {}, {}, {}, {}, {}, listOf(a, b), startChecks = emptyList()) } } }
         compose.onNode(hasContentDescription("갤러리 1번째", substring = true)).performClick()
         compose.waitForIdle()
-        assertEquals(photo, deck.slides[0].top.uri)
-        assertEquals("Research 5 companies", deck.slides[0].top.text)
-        assertEquals("", deck.slides[0].bottom.text)
+        compose.onNode(hasContentDescription("갤러리 2번째", substring = true)).performClick()
+        compose.waitForIdle()
+        assertEquals(listOf(clips[0].uri, clips[1].uri), deck.slides.map { it.top.uri })
+        assertEquals(listOf("", ""), deck.slides.map { it.top.text })
+        assertEquals(listOf(a, b), deck.slides.map { it.bottom.uri })
+        assertEquals(clips.map { it.title }, deck.slides.map { it.bottom.text })
     }
 }

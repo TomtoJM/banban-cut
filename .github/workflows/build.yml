@@ -128,7 +128,7 @@ jobs:
           script: |
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true || touch failed
             mkdir -p videocheck
-            for f in 1-video-photo 2-photo-video 3-two-videos 4-full-video 5-reel 5-reel-1 5-reel-2 5-reel-3; do adb exec-out run-as app.banban.cut cat files/videocheck/$f.png > videocheck/$f.png || true; adb exec-out run-as app.banban.cut cat files/videocheck/$f.mp4 > videocheck/$f.mp4 || true; done
+            for f in 1-video-photo 2-photo-video 3-two-videos 4-full-video 5-reel 5-reel-1 5-reel-2 5-reel-3 6-check-post 7-check-reel 7-check-reel-1 7-check-reel-2; do adb exec-out run-as app.banban.cut cat files/videocheck/$f.png > videocheck/$f.png || true; adb exec-out run-as app.banban.cut cat files/videocheck/$f.mp4 > videocheck/$f.mp4 || true; done
             adb logcat -d | grep -E "VIDEOCHECK|CHECKS|ExportException|Transformer|AndroidRuntime|TestRunner" | tail -120 || true
             test ! -f failed
 

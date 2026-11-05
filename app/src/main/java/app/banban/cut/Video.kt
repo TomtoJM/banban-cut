@@ -59,7 +59,8 @@ object Video {
         val ms = checkNotNull(slide.clipMs)
         // Everything that reads files happens here, off the main thread.
         val cover = cover(context, slide, face, width, height, overVideo = true)
-        val videos = slide.frames.withIndex().filter { it.value.isVideo }
+        // The first sequence is drawn on top: a check video lying over the real-thing spot goes first.
+        val videos = slide.frames.withIndex().filter { it.value.isVideo }.sortedBy { if (it.value.check) 0 else 1 }
         val items = videos.map { (part, f) ->
             val size = withContext(Dispatchers.IO) { size(context, checkNotNull(f.uri)) }
             item(slide, part, f, size, ms, alone = videos.size == 1, width, height)
@@ -68,7 +69,7 @@ object Video {
             .setEffects(Effects(emptyList(), listOf(OverlayEffect(listOf(BitmapOverlay.createStaticBitmapOverlay(cover))))))
             // Phones film in HDR more and more; the post and the photos next to it are SDR.
             .setHdrMode(Composition.HDR_MODE_TONE_MAP_HDR_TO_SDR_USING_OPEN_GL)
-            .apply { if (items.size > 1) setVideoCompositorSettings(halves(width, height)) }
+            .apply { if (items.size > 1) setVideoCompositorSettings(placed(videos.map { Art.area(slide, it.index, width.toFloat(), height.toFloat()) }, width, height)) }
             .build()
         run(context, composition, out)
         cover.recycle()
@@ -171,9 +172,10 @@ object Video {
             Crop(-1 + 2 * v.left, -1 + 2 * v.right, 1 - 2 * v.bottom, 1 - 2 * v.top),
             Presentation.createForWidthAndHeight(r.width().toInt(), r.height().toInt(), Presentation.LAYOUT_STRETCH_TO_FIT),
         )
-        if (alone && slide.layout == Layout.Halves) {
+        if (alone && r.height() < height) {
+            // Every spot is full width: fit it into the whole frame (it lands centred), then move it up or down into place.
             effects += Presentation.createForWidthAndHeight(width, height, Presentation.LAYOUT_SCALE_TO_FIT)
-            val shift = if (part == 0) 0.5f else -0.5f
+            val shift = shift(r, height)
             effects += MatrixTransformation { Matrix().apply { postTranslate(0f, shift) } }
         }
         if (cover != null) effects += cover
@@ -184,13 +186,16 @@ object Video {
         return EditedMediaItem.Builder(media).setEffects(Effects(emptyList(), effects)).build()
     }
 
-    /** Two videos: the first sequence fills the top half, the second the bottom. */
-    private fun halves(width: Int, height: Int) = object : VideoCompositorSettings {
+    /** How far a full-width spot's centre sits from the frame's, in GL units (up is positive). */
+    private fun shift(r: android.graphics.RectF, height: Int) = (height / 2f - r.centerY()) / (height / 2f)
+
+    /** Two videos, each moved into its own spot ([areas] in sequence order). */
+    private fun placed(areas: List<android.graphics.RectF>, width: Int, height: Int) = object : VideoCompositorSettings {
         override fun getOutputSize(inputSizes: List<Size>) = Size(width, height)
         override fun getOverlaySettings(inputId: Int, presentationTimeUs: Long): OverlaySettings =
             StaticOverlaySettings.Builder()
                 .setOverlayFrameAnchor(0f, 0f)
-                .setBackgroundFrameAnchor(0f, if (inputId == 0) 0.5f else -0.5f)
+                .setBackgroundFrameAnchor(0f, shift(areas[inputId], height))
                 .build()
     }
 

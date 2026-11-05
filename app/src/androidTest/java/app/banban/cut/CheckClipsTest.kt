@@ -74,14 +74,15 @@ class CheckClipsTest {
         assertEquals(listOf(a, b), found.map { it.uri })
         assertTrue("length ${found[0].durationMs}", found[0].durationMs in 2_000..2_800)
 
-        // One already has a top photo; the second goes on a new slide.
-        val deck = Checks.fill(Deck(listOf(Slide(top = Frame(Uri.parse("content://x/1"))))), found, Frame())
+        // One slide already has a bottom photo; the second clip goes on a new slide.
+        val deck = Checks.fill(Deck(listOf(Slide(bottom = Frame(Uri.parse("content://x/1"))))), found, Frame())
         assertEquals(2, deck.slides.size)
-        assertEquals(a, deck.slides[0].bottom.uri)
-        assertEquals("Research 5 companies", deck.slides[0].top.text)
-        assertEquals("", deck.slides[0].bottom.text)
-        assertEquals(1f, deck.slides[0].bottom.zoom)
-        assertEquals(b, deck.slides[1].bottom.uri)
+        assertEquals(a, deck.slides[0].top.uri)
+        assertEquals("Research 5 companies", deck.slides[0].bottom.text)
+        assertEquals("", deck.slides[0].top.text)
+        assertEquals(1f, deck.slides[0].top.zoom)
+        assertEquals(0.625f, deck.slides[0].top.checkRatio, 0.01f) // 1080×675 read from the phone
+        assertEquals(b, deck.slides[1].top.uri)
         assertEquals(listOf(a, b), deck.originals())
 
         // Saved once, never offered again, even if it comes back from the trash.

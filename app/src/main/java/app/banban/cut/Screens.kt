@@ -541,7 +541,7 @@ fun EditorScreen(
                                 )
                                 if (mine && tool == Tool.None) s.frames.forEachIndexed { p, f ->
                                     if (f.uri != null) RemoveButton(
-                                        Modifier.offset(y = if (p == 0) 0.dp else slideH / 2),
+                                        Modifier.offset(y = slideW * Art.shown(s, p, 1f, 1f / deck.aspect).top),
                                     ) {
                                         if (part == p) part = null
                                         set(i, current.slides[i].with(p, f.emptied()))
@@ -848,7 +848,7 @@ fun SlideCanvas(
     val tap by rememberUpdatedState(onTap)
     val move by rememberUpdatedState(onMove)
     val tapWords by rememberUpdatedState(onTapWords)
-    val partOf = { y: Float, h: Float -> if (latest.layout == Layout.Single || y < h / 2) 0 else 1 }
+    val partOf = { y: Float, h: Float -> Art.partAt(latest, y, h * aspect, h) }
 
     Canvas(
         modifier.aspectRatio(aspect).clip(RoundedCornerShape(4.dp))
@@ -888,6 +888,7 @@ fun SlideCanvas(
                             val h = size.height.toFloat()
                             val r = Art.area(s, p, w, h)
                             if (moveWords) {
+                                val r = Art.shown(s, p, w, h)
                                 val start = words ?: Art.words(s, p, w, h, face)?.second?.let { Offset(it.centerX(), it.centerY()) }
                                 if (start != null) {
                                     val next = start + pan
@@ -921,7 +922,7 @@ fun SlideCanvas(
         slide.frames.forEachIndexed { p, f ->
             if (f.uri == null && f.text.isNotBlank()) {
                 // Words already waiting: show them as they'll look, and a small "add" below them.
-                val r = Art.area(slide, p, size.width, size.height)
+                val r = Art.shown(slide, p, size.width, size.height)
                 val label = "사진·영상 넣기"
                 val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
                     textSize = 13.dp.toPx(); color = android.graphics.Color.WHITE; typeface = android.graphics.Typeface.DEFAULT_BOLD
@@ -938,11 +939,11 @@ fun SlideCanvas(
                 drawIntoCanvas { it.nativeCanvas.drawText(label, left + padX + icon + 6.dp.toPx(), top + h / 2 - (paint.ascent() + paint.descent()) / 2, paint) }
             } else if (f.uri == null) {
                 // An empty spot reads as "put a photo here".
-                val r = Art.area(slide, p, size.width, size.height)
+                val r = Art.shown(slide, p, size.width, size.height)
                 val d = minOf(r.width(), r.height()) * 0.22f
                 drawCircle(Color.White.copy(alpha = 0.16f), d * 0.75f, Offset(r.centerX(), r.centerY()))
                 drawGlyph(Glyph.Add, Color.White.copy(alpha = 0.85f), Offset(r.centerX(), r.centerY()), d * 0.6f)
-            } else if (f.isVideo) drawVideoBadge(Art.area(slide, p, size.width, size.height), f.durationMs, slide.clipMs ?: f.durationMs)
+            } else if (f.isVideo) drawVideoBadge(Art.shown(slide, p, size.width, size.height), f.durationMs, slide.clipMs ?: f.durationMs)
         }
         if (guide) {
             // Instagram's buttons and caption sit here; shade it so photos and words keep clear.
@@ -958,7 +959,7 @@ fun SlideCanvas(
             )
         }
         if (selectedPart != null) {
-            val r = Art.area(slide, selectedPart, size.width, size.height)
+            val r = Art.shown(slide, selectedPart, size.width, size.height)
             val inset = 1.5.dp.toPx()
             drawRect(Tds.Blue500, Offset(r.left + inset, r.top + inset), Size(r.width() - inset * 2, r.height() - inset * 2), style = Stroke(3.dp.toPx()))
             if (moveWords && slide.frame(selectedPart).textX == 0.5f && slide.frame(selectedPart).text.isNotBlank()) {

@@ -10,7 +10,7 @@ import android.provider.MediaStore
  * banban-cut spot) in DCIM/Atomic ToDoList/, oldest first is the order they were ticked, and
  * each one's MediaStore TITLE (from the title inside the MP4) or file name is the todo's name. See docs/CHECK_CLIPS.md for the agreement.
  */
-data class CheckClip(val uri: Uri, val title: String, val durationMs: Long, val key: String)
+data class CheckClip(val uri: Uri, val title: String, val durationMs: Long, val key: String, val ratio: Float = Frame.CHECK_RATIO)
 
 object Checks {
     const val FOLDER = "DCIM/Atomic ToDoList/"
@@ -27,6 +27,7 @@ object Checks {
             arrayOf(
                 MediaStore.Video.Media._ID, MediaStore.Video.Media.TITLE, MediaStore.Video.Media.DISPLAY_NAME,
                 MediaStore.Video.Media.SIZE, MediaStore.Video.Media.DURATION,
+                MediaStore.Video.Media.WIDTH, MediaStore.Video.Media.HEIGHT, MediaStore.Video.Media.ORIENTATION,
             ),
             "${MediaStore.Video.Media.RELATIVE_PATH} = ?",
             arrayOf(FOLDER),
@@ -40,7 +41,11 @@ object Checks {
                     if (key in used || uri in skip) continue
                     val ms = c.getLong(4).coerceAtLeast(1L)
                     Gallery.noteVideo(uri, ms)
-                    add(CheckClip(uri, title(c.getString(1), name), ms, key))
+                    // The video's shape as shown, so its spot can show all of it.
+                    val vw = c.getInt(5); val vh = c.getInt(6)
+                    val turned = c.getInt(7) % 180 != 0
+                    val ratio = if (vw > 0 && vh > 0) (if (turned) vw.toFloat() / vh else vh.toFloat() / vw) else Frame.CHECK_RATIO
+                    add(CheckClip(uri, title(c.getString(1), name), ms, key, ratio))
                 }
             }
         } ?: emptyList()
@@ -79,9 +84,9 @@ object Checks {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getStringSet(USED, emptySet()).orEmpty().toSet()
 
     /**
-     * Puts the clips into the bottom spots, one per slide in order: first the slides whose bottom
-     * is empty, then new slides. Each clip sits centred at zoom 1, which fills the spot exactly,
-     * with no words; the todo's name goes on the same slide's top spot (unless it has words).
+     * Puts the clips into the top spots, one per slide in order: first the slides whose top is
+     * empty, then new slides. Each clip sits centred at zoom 1, which shows all of it, with no
+     * words; the todo's name goes on the same slide's bottom spot (unless it has words).
      */
     /** How much an action spot is darkened at first, so white words read over a bright photo. */
     const val ACTION_DIM = 0.25f
@@ -90,18 +95,19 @@ object Checks {
         val slides = deck.slides.toMutableList()
         var i = 0
         for (clip in clips) {
-            while (i < slides.size && !(slides[i].layout == Layout.Halves && slides[i].bottom.uri == null)) i++
+            while (i < slides.size && !(slides[i].layout == Layout.Halves && slides[i].top.uri == null)) i++
             if (i >= slides.size) {
                 if (slides.size >= Deck.MAX_SLIDES) break
                 val blank = style.emptied().copy(text = "")
                 slides += Slide(top = blank, bottom = blank)
             }
             val s = slides[i]
-            // The todo's name goes on the top spot, where the real thing will be shown, with a
-            // little darkening so the words read over any photo; the check video stays wordless.
-            val top = if (s.top.text.isNotBlank()) s.top else s.top.copy(text = clip.title, dim = maxOf(s.top.dim, ACTION_DIM))
-            val app = s.bottom.copy(uri = clip.uri, zoom = 1f, x = 0f, y = 0f, durationMs = clip.durationMs, text = "", check = true)
-            slides[i] = s.copy(top = top, bottom = app)
+            // The check video goes on top, wordless, at zoom 1 (its whole width shows). The todo's
+            // name goes on the bottom spot, where the real thing will be shown, with a little
+            // darkening so the words read over any photo.
+            val app = s.top.copy(uri = clip.uri, zoom = 1f, x = 0f, y = 0f, durationMs = clip.durationMs, text = "", dim = 0f, check = true, ratio = clip.ratio)
+            val act = if (s.bottom.text.isNotBlank()) s.bottom else s.bottom.copy(text = clip.title, dim = maxOf(s.bottom.dim, ACTION_DIM))
+            slides[i] = s.copy(top = app, bottom = act)
             i++
         }
         return deck.copy(slides = slides)
