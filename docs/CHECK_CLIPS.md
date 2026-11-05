@@ -19,9 +19,15 @@ or a name in the file name, reaches banban-cut.
 1. On open (and on coming back to the app) it looks for check videos it hasn't used yet and shows
    "체크 영상 n개 가져올까요?" with one button. Needs READ_MEDIA_VIDEO/IMAGES, asked once; without it
    the app works through the system photo picker and no check videos appear.
-2. The button puts one clip in each bottom spot, in order: first slides with an empty bottom, then
-   new slides (up to 20). Centred, zoom 1 (fills the spot), no words. The todo's name goes on the
-   same slide's top spot (the real thing being done) with a little darkening, unless it has words.
+2. The button puts one clip in each top spot, in order: first slides with an empty top, then new
+   slides (up to 20). Zoom 1, no words; the whole video shows. The todo's name goes on the same
+   slide's bottom spot (the real thing being done) with a little darkening, unless it has words.
+   - Post (4:5): two equal 8:5 halves, check video on top.
+   - Reel (9:16): the check spot is full width at the video's own shape (1080×675 for 8:5; another
+     shape, like an old 9:8, uses its own) and starts at Instagram's top bar line (15.5%), so the
+     app's date line isn't covered. The real-thing spot fills the reel behind it: the strip above
+     (under Instagram's bar) and everything below. Its words sit between the check video and
+     Instagram's bottom line (23.4%).
 3. Saving writes the slides to `DCIM/반반컷/`, then (switch on by default) sends every original the
    carousel used that is in the phone's library to the trash with one `MediaStore.createTrashRequest`,
    so there is one system confirmation. Trashed items stay 30 days and can be restored.
