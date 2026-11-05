@@ -20,7 +20,8 @@ or a name in the file name, reaches banban-cut.
    "체크 영상 n개 가져올까요?" with one button. Needs READ_MEDIA_VIDEO/IMAGES, asked once; without it
    the app works through the system photo picker and no check videos appear.
 2. The button puts one clip in each bottom spot, in order: first slides with an empty bottom, then
-   new slides (up to 20). Centred, zoom 1 (fills the spot), words = the todo's name, editable.
+   new slides (up to 20). Centred, zoom 1 (fills the spot), no words. The todo's name goes on the
+   same slide's top spot (the real thing being done) with a little darkening, unless it has words.
 3. Saving writes the slides to `DCIM/반반컷/`, then (switch on by default) sends every original the
    carousel used that is in the phone's library to the trash with one `MediaStore.createTrashRequest`,
    so there is one system confirmation. Trashed items stay 30 days and can be restored.
