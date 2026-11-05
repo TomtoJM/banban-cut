@@ -172,11 +172,13 @@ object Video {
             Crop(-1 + 2 * v.left, -1 + 2 * v.right, 1 - 2 * v.bottom, 1 - 2 * v.top),
             Presentation.createForWidthAndHeight(r.width().toInt(), r.height().toInt(), Presentation.LAYOUT_STRETCH_TO_FIT),
         )
-        if (alone && r.height() < height) {
-            // Every spot is full width: fit it into the whole frame (it lands centred), then move it up or down into place.
+        if (alone && (r.height() < height || r.width() < width)) {
+            // Fit it into the whole frame (it lands centred, full width), shrink it back to its
+            // spot's width (a reel's check video keeps clear of the sides), then move it up or down into place.
             effects += Presentation.createForWidthAndHeight(width, height, Presentation.LAYOUT_SCALE_TO_FIT)
+            val k = r.width() / width
             val shift = shift(r, height)
-            effects += MatrixTransformation { Matrix().apply { postTranslate(0f, shift) } }
+            effects += MatrixTransformation { Matrix().apply { postScale(k, k); postTranslate(0f, shift) } }
         }
         if (cover != null) effects += cover
         val media = MediaItem.Builder()

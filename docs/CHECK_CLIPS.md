@@ -23,11 +23,13 @@ or a name in the file name, reaches banban-cut.
    slides (up to 20). Zoom 1, no words; the whole video shows. The todo's name goes on the same
    slide's bottom spot (the real thing being done) with a little darkening, unless it has words.
    - Post (4:5): two equal 8:5 halves, check video on top.
-   - Reel (9:16): the check spot is full width at the video's own shape (1080×675 for 8:5; another
-     shape, like an old 9:8, uses its own) and starts at Instagram's top bar line (15.5%), so the
-     app's date line isn't covered. The real-thing spot fills the reel behind it: the strip above
-     (under Instagram's bar) and everything below. Its words sit between the check video and
-     Instagram's bottom line (23.4%).
+   - Reel (9:16): the check video sits in a strip pinned to the very top, edge to edge. The video
+     keeps its own shape (8:5; another shape, like an old 9:8, uses its own) at 84% of the width,
+     so it stays inside Instagram's side margins (8% each side; taller phones zoom a reel and cut
+     its sides). The strip's sides are filled with the video's own edge colour. 8:5 → 907×567 in
+     a 1080×567 strip. Instagram's top bar (about the top 15%) lies over the strip's upper part.
+     The real-thing spot fills the reel behind it; what shows is everything below the strip. Its
+     words sit between the strip and Instagram's bottom line (23.4%).
 3. Saving writes the slides to `DCIM/반반컷/`, then (switch on by default) sends every original the
    carousel used that is in the phone's library to the trash with one `MediaStore.createTrashRequest`,
    so there is one system confirmation. Trashed items stay 30 days and can be restored.

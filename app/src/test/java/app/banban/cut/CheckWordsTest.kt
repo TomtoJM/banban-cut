@@ -82,17 +82,18 @@ class CheckWordsTest {
         assertEquals(RectF(0f, 0f, 1f, 1f), Art.visible(1080, 675, s.top, r)) // nothing cut off
     }
 
-    @Test fun reelCheckSpotIsFullWidthAtItsOwnShape() {
+    @Test fun reelCheckSpotIsPinnedToTheTopInsideTheSides() {
         val s = Checks.fill(Deck(listOf(Slide())), clips.take(1), Frame()).slides[0]
         val r = Art.area(s, 0, 1080f, 1920f)
-        assertEquals(1080f, r.width(), 0.5f)
-        assertEquals(675f, r.height(), 0.5f) // width × 5/8
-        assertEquals(1920f * 0.155f, r.top, 0.5f) // starts below Instagram's top bar
-        assertEquals(RectF(0f, 0f, 1f, 1f), Art.visible(1080, 675, s.top, r))
+        val side = 1080f * Deck.SAFE_SIDE
+        assertEquals(RectF(side, 0f, 1080f - side, r.bottom), r) // at the very top, clear of the sides
+        assertEquals(r.width() * 5f / 8f, r.height(), 0.5f) // its own 8:5 shape
+        assertEquals(RectF(0f, 0f, 1f, 1f), Art.visible(1080, 675, s.top, r)) // nothing cut off
+        assertEquals(RectF(0f, 0f, 1080f, r.bottom), Art.shown(s, 0, 1080f, 1920f)) // the strip runs edge to edge
         assertEquals(RectF(0f, r.bottom, 1080f, 1920f), Art.shown(s, 1, 1080f, 1920f))
         // An older 9:8 check video: its spot follows its own shape.
         val tall = s.copy(top = s.top.copy(ratio = 8f / 9f))
-        assertEquals(960f, Art.area(tall, 0, 1080f, 1920f).height(), 0.5f)
+        assertEquals(r.width() * 8f / 9f, Art.area(tall, 0, 1080f, 1920f).height(), 0.5f)
         // Words sit below the check video and above Instagram's caption.
         val box = Art.words(s, 1, 1080f, 1920f, face)!!.second
         assertTrue("words at ${box.top}", box.top >= r.bottom && box.bottom <= 1920f * (1 - 0.234f))
@@ -116,10 +117,11 @@ class CheckWordsTest {
         val bmp = Bitmap.createBitmap(1080, 1920, Bitmap.Config.ARGB_8888)
         Art.draw(Canvas(bmp), s, 1080f, 1920f, face, overVideo = true) { Photos.peek(it) }
         val band = Art.area(s, 0, 1080f, 1920f)
-        assertEquals("photo above the check video", 255, Color.alpha(bmp.getPixel(540, (band.top / 2).toInt())))
+        assertEquals("check video clear, right at the top", 0, Color.alpha(bmp.getPixel(540, 2)))
         assertEquals("check band clear", 0, Color.alpha(bmp.getPixel(540, band.centerY().toInt())))
+        assertEquals("sides of the strip filled", 255, Color.alpha(bmp.getPixel(20, band.centerY().toInt())))
+        assertEquals("sides of the strip filled", 255, Color.alpha(bmp.getPixel(1060, band.centerY().toInt())))
         assertEquals("photo below", 255, Color.alpha(bmp.getPixel(540, (band.bottom + 100).toInt())))
-        assertFalse(white(bmp, band.top.toInt(), band.bottom.toInt()))
         assertTrue(white(bmp, band.bottom.toInt(), 1920))
     }
 

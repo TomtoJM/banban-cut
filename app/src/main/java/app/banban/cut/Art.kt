@@ -69,15 +69,17 @@ object Art {
     /**
      * The area of [part] on a slide of the given size: what its photo or video is cropped to.
      *
-     * A reel whose top spot is an Atomic ToDoList check video is laid out differently: the check
-     * video gets its own shape at full width (1080×675 for 8:5), so none of the app's screen is cut
-     * off, and it starts where Instagram's top bar ends so the app's date line stays in sight. The
-     * real-thing spot fills the whole reel behind it; what shows of it is the strip above (under
-     * Instagram's bar anyway) and everything below. See [shown].
+     * A reel whose top spot is an Atomic ToDoList check video is laid out differently. The check
+     * video sits in a strip pinned to the very top, edge to edge. The video itself keeps its own
+     * shape and stays inside Instagram's side margins ([Deck.SAFE_SIDE]), since phones taller than
+     * 9:16 zoom a reel and cut its sides; the strip's sides are filled with the video's own edge
+     * colour, so it reads as one band (content in the safe area, background to the edges, as in
+     * Apple's layout guidance). The real-thing spot fills the whole reel behind it; what shows of
+     * it is everything below the strip. See [shown].
      */
     fun area(slide: Slide, part: Int, w: Float, h: Float): RectF {
         if (slide.layout == Layout.Single) return RectF(0f, 0f, w, h)
-        band(slide, w, h)?.let { band -> return if (part == 0) band else RectF(0f, 0f, w, h) }
+        band(slide, w, h)?.let { band -> return if (part == 0) RectF(w * Deck.SAFE_SIDE, 0f, w * (1 - Deck.SAFE_SIDE), band.bottom) else RectF(0f, 0f, w, h) }
         return if (part == 0) RectF(0f, 0f, w, h / 2) else RectF(0f, h / 2, w, h)
     }
 
@@ -93,11 +95,21 @@ object Art {
         else if (shown(slide, 0, w, h).let { y >= it.top && y < it.bottom }) 0
         else if (band(slide, w, h) == null && y < h / 2) 0 else 1
 
-    /** The check video's spot in a reel (top spot only, so slides made before keep their halves). */
+    /** The check video's strip in a reel, full width at the very top (top spot only, so slides made before keep their halves). */
     private fun band(slide: Slide, w: Float, h: Float): RectF? {
         if (slide.layout != Layout.Halves || !slide.top.check || slide.bottom.check || h <= w * 1.6f) return null
-        val top = h * REEL_TOP
-        return RectF(0f, top, w, top + w * slide.top.checkRatio)
+        return RectF(0f, 0f, w, w * (1 - 2 * Deck.SAFE_SIDE) * slide.top.checkRatio)
+    }
+
+    /** The average colour down a picture's left and right edges, to fill beside a check video. */
+    fun edge(bmp: Bitmap): Int {
+        var r = 0L; var g = 0L; var b = 0L; var n = 0
+        val step = maxOf(1, bmp.height / 48)
+        for (y in 0 until bmp.height step step) for (x in intArrayOf(0, 1, bmp.width - 2, bmp.width - 1)) {
+            val c = bmp.getPixel(x.coerceIn(0, bmp.width - 1), y)
+            r += Color.red(c); g += Color.green(c); b += Color.blue(c); n++
+        }
+        return if (n == 0) EMPTY else Color.rgb((r / n).toInt(), (g / n).toInt(), (b / n).toInt())
     }
 
     /**
@@ -106,10 +118,19 @@ object Art {
      */
     fun draw(canvas: Canvas, slide: Slide, w: Float, h: Float, typeface: Typeface, overVideo: Boolean = false, photo: (Uri) -> Bitmap?) {
         // A check video lying over the real-thing spot is drawn last, on top.
-        val order = if (band(slide, w, h) != null) listOf(1, 0) else slide.frames.indices.toList()
+        val band = band(slide, w, h)
+        val order = if (band != null) listOf(1, 0) else slide.frames.indices.toList()
         for (part in order) {
             val frame = slide.frame(part)
             val r = area(slide, part, w, h)
+            if (band != null && part == 0) {
+                // The strip's sides take the video's own edge colour.
+                val still = frame.uri?.let(photo)
+                canvas.save()
+                canvas.clipRect(band)
+                canvas.drawColor(still?.let(::edge) ?: EMPTY)
+                canvas.restore()
+            }
             canvas.save()
             canvas.clipRect(r)
             if (overVideo && frame.isVideo) canvas.drawColor(Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR)
