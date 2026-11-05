@@ -197,6 +197,8 @@ fun EditorScreen(
     // Where the picker's photos go: the empty spot that was tapped (slide, part).
     var picking by remember { mutableStateOf(startPicker) }
     var pickFrom by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    // The spot the in-app camera is filming for (slide, part); a slide past the end means a new one.
+    var filming by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     // Check videos from Atomic ToDoList waiting to go in; the bar can be put away for now.
     var checks by remember { mutableStateOf(startChecks ?: emptyList()) }
     var checksAway by remember { mutableStateOf(false) }
@@ -280,6 +282,13 @@ fun EditorScreen(
             d.slides.size < Deck.MAX_SLIDES -> addSlide(uri)
             else -> say("슬라이드는 ${Deck.MAX_SLIDES}장까지 만들 수 있어요")
         }
+    }
+
+    /** Where a filmed video goes, the same way a tapped photo would: the chosen empty spot, the earliest gap, or a new slide. */
+    fun filmSpot(): Pair<Int, Int> {
+        val pg = pager.currentPage
+        val chosen = part?.takeIf { current.slides.getOrNull(pg)?.frame(it)?.uri == null }
+        return if (chosen != null) pg to chosen else current.firstEmpty() ?: (current.slides.size to 0)
     }
 
     /**
@@ -606,7 +615,11 @@ fun EditorScreen(
                     },
                     fontSize = 13.sp, color = Tds.Grey600, modifier = Modifier.padding(start = 20.dp, top = 2.dp, bottom = 6.dp),
                 )
-                GalleryGrid(deck, gallery, onPick = ::pick, modifier = Modifier.weight(1f))
+                GalleryGrid(
+                    deck, gallery, onPick = ::pick, modifier = Modifier.weight(1f),
+                    filmLabel = "${Shot.seconds(filmSpot().let { (i, p) -> Shot.lengthFor(deck, i, p) })} 영상 찍기",
+                    onFilm = { filming = filmSpot(); part = null },
+                )
             }
         }
 
@@ -616,9 +629,13 @@ fun EditorScreen(
             onDownload = ::download, onClose = { reviewing = false },
         )
         picking?.let { from ->
-            MediaPicker(
-                deck, gallery, onDone = { picking = null; place(it, from) }, onClose = { picking = null },
-                lengthMs = Shot.lengthFor(deck, from.first, from.second), aspect = Shot.aspectFor(deck, from.first, from.second),
+            MediaPicker(deck, gallery, onDone = { picking = null; place(it, from) }, onClose = { picking = null })
+        }
+        filming?.let { to ->
+            ClipCamera(
+                lengthMs = Shot.lengthFor(deck, to.first, to.second), aspect = Shot.aspectFor(deck, to.first, to.second),
+                onDone = { uri, _ -> filming = null; place(listOf(uri), to); goTo(to.first) },
+                onClose = { filming = null },
             )
         }
         exporting?.let { n -> ExportingScreen(n, deck.slides.size, deck.slides.any { it.clipMs != null }, deck.reel) }
@@ -708,7 +725,10 @@ private fun RemoveButton(modifier: Modifier, onClick: () -> Unit) {
  * Without access yet, one plain ask; with access to only some photos, a way to share more.
  */
 @Composable
-private fun GalleryGrid(deck: Deck, sample: List<Uri>?, onPick: (Uri) -> Unit, modifier: Modifier) {
+private fun GalleryGrid(
+    deck: Deck, sample: List<Uri>?, onPick: (Uri) -> Unit, modifier: Modifier,
+    filmLabel: String = "영상 찍기", onFilm: () -> Unit = {},
+) {
     val context = LocalContext.current
     var version by remember { mutableIntStateOf(0) }
     var access by remember { mutableStateOf(if (sample != null) Gallery.Access.All else Gallery.access(context)) }
@@ -759,6 +779,8 @@ private fun GalleryGrid(deck: Deck, sample: List<Uri>?, onPick: (Uri) -> Unit, m
             verticalArrangement = Arrangement.spacedBy(2.dp),
             modifier = Modifier.weight(1f),
         ) {
+            // First cell: film the next spot's video right here, as long as its check video.
+            item(key = "film") { CameraTile(filmLabel, video = true, onClick = onFilm) }
             itemsIndexed(photos, key = { _, it -> it.toString() }) { i, uri ->
                 val used = deck.uses(uri) > 0
                 val video = if (Gallery.isVideo(uri)) Gallery.durationMs(context, uri) else 0L

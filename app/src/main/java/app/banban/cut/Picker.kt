@@ -78,8 +78,6 @@ fun MediaPicker(
     sample: List<Uri>?,
     onDone: (List<Uri>) -> Unit,
     onClose: () -> Unit,
-    lengthMs: Long = Video.STILL_MS,
-    aspect: Float = 8f / 5f,
 ) {
     val context = LocalContext.current
     BackHandler(onBack = onClose)
@@ -98,8 +96,6 @@ fun MediaPicker(
         if (ok) { chosen = chosen + uri; version++ } else runCatching { context.contentResolver.delete(uri, null, null) }
     }
     val photo = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { took(it) }
-    // Videos are filmed in the app, so they come out exactly as long as the spot needs.
-    var filming by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize().background(Tds.White).clickable(remember { MutableInteractionSource() }, null) {}) {
         Row(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -119,9 +115,6 @@ fun MediaPicker(
         ) {
             item(key = "photo") {
                 CameraTile("사진 찍기", video = false) { capture(context, video = false)?.let { shooting = it; photo.launch(it) } }
-            }
-            item(key = "video") {
-                CameraTile("${Shot.seconds(lengthMs)} 영상 찍기", video = true) { filming = true }
             }
             itemsIndexed(items, key = { _, it -> it.toString() }) { i, uri ->
                 val used = deck.uses(uri) > 0
@@ -165,15 +158,10 @@ fun MediaPicker(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp).height(56.dp),
         ) { Text(if (chosen.isEmpty()) "넣을 사진·동영상을 골라 주세요" else "${chosen.size}개 넣기", fontSize = 17.sp, fontWeight = FontWeight.Bold) }
     }
-    if (filming) ClipCamera(
-        lengthMs = lengthMs, aspect = aspect,
-        onDone = { uri, _ -> filming = false; chosen = chosen + uri; version++ },
-        onClose = { filming = false },
-    )
 }
 
 @Composable
-private fun CameraTile(label: String, video: Boolean, onClick: () -> Unit) {
+internal fun CameraTile(label: String, video: Boolean, onClick: () -> Unit) {
     Column(
         Modifier.aspectRatio(1f).background(Tds.Grey100).clickable(onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally,
